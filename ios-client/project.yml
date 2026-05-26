@@ -81,7 +81,11 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.dnspire.ios.tunnel
-        PRODUCT_MODULE_NAME: DNSpirePacketTunnel
+        # Avoid colliding with the gomobile-generated Swift type
+        # `DNSpirePacketTunnel` (prefix `DNSpire` + Go struct `PacketTunnel`).
+        # If the module is also named DNSpirePacketTunnel, Swift resolves the
+        # bare identifier to the module instead of the framework type.
+        PRODUCT_MODULE_NAME: DNSpireTunnelExt
         CODE_SIGN_ENTITLEMENTS: DNSpirePacketTunnel/DNSpirePacketTunnel.entitlements
     dependencies:
       - framework: Frameworks/DNSpireCore.xcframework
