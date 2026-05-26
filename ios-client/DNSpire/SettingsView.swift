@@ -183,18 +183,20 @@ private struct ResolverEditor: View {
             }
         }
 
-        if activeResolvers.isEmpty {
-            Text("No resolvers")
-                .foregroundStyle(.secondary)
-        } else {
-            ForEach(activeResolvers.prefix(6)) { resolver in
-                Text(resolver.displayAddress)
-                    .font(.subheadline)
-                    .monospaced()
-            }
-            if activeResolvers.count > 6 {
-                Text("+\(activeResolvers.count - 6)")
+        Group {
+            if activeResolvers.isEmpty {
+                Text("No resolvers")
                     .foregroundStyle(.secondary)
+            } else {
+                ForEach(activeResolvers.prefix(6)) { resolver in
+                    Text(resolver.displayAddress)
+                        .font(.subheadline)
+                        .monospaced()
+                }
+                if activeResolvers.count > 6 {
+                    Text("+\(activeResolvers.count - 6)")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .sheet(isPresented: $showingEditor) {
