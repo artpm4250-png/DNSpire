@@ -49,7 +49,7 @@ targets:
         UIRequiresFullScreen: false
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
-        # Permit WKWebView traffic to flow through the local SOCKS5 endpoint.
+        # Permit proxy clients and test endpoints to use plain HTTP when needed.
         # End sites are still subject to their own TLS requirements.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true

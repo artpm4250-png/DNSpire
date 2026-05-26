@@ -25,6 +25,10 @@ final class TunnelController: ObservableObject {
     @Published private(set) var socksAddress: String = ""
     @Published private(set) var lastError: String?
 
+    var isProxyReady: Bool {
+        !socksAddress.isEmpty && status != .error
+    }
+
     private var tunnel: DNSpireMobileTunnel?
     private weak var logStore: LogStore?
 
@@ -75,6 +79,8 @@ final class TunnelController: ObservableObject {
         }
         self.tunnel = nil
         self.socksAddress = ""
+        self.status = .stopped
+        self.statusDetail = ""
     }
 
     private func applyStatusString(_ state: String) {

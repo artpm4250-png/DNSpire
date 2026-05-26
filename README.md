@@ -2,25 +2,24 @@
 
 A SwiftUI iOS client for [MasterDnsVPN](https://github.com/masterking32/MasterDnsVPN),
 a DNS-tunneling VPN. The Go reference client is wrapped via `gomobile bind` and
-embedded into a SwiftUI app that exposes its local SOCKS5 listener through an
-in-app `WKWebView` browser.
+embedded into a SwiftUI app that exposes its local SOCKS5 listener for external
+proxy clients such as Happ or Shadowrocket.
 
 ## Status
 
 Two operating modes, selectable in the **Connect** tab:
 
-**1. In-app browser (works with free Apple ID).** The app spawns the Go client
-in-process, which opens a local SOCKS5 listener on `127.0.0.1:18000`. The
-built-in **Browser** tab routes WebKit traffic through that SOCKS5 (via
-`WKWebsiteDataStore.proxyConfigurations`, iOS 17+). No NetworkExtension
+**1. Local SOCKS5 proxy (works with free Apple ID).** The app spawns the Go
+client in-process, which opens a local SOCKS5 listener on `127.0.0.1:18000`.
+Use that host and port in a third-party proxy client. No NetworkExtension
 entitlement needed — sideloads cleanly with any Apple ID.
 
 **2. System-wide VPN (requires paid Apple Developer account).** An
 `NEPacketTunnelProvider` extension hosts the same Go client plus a userspace
 TCP/IP stack (gVisor netstack). The extension claims the default route via
-`NETunnelProviderManager`, so every TCP flow on the device — every app, not
-just our browser — is funnelled through the DNS tunnel. UDP-53 is shimmed onto
-DNS-over-TCP; all other UDP is dropped (QUIC falls back to TCP). The
+`NETunnelProviderManager`, so every TCP flow on the device is funnelled through
+the DNS tunnel. UDP-53 is shimmed onto DNS-over-TCP; all other UDP is dropped
+(QUIC falls back to TCP). The
 `com.apple.developer.networking.networkextension` entitlement is gated to
 paid-account provisioning profiles only; free Apple ID via Xcode / AltStore
 **cannot** install this mode — the extension target will refuse to load.
@@ -36,7 +35,7 @@ paid-account provisioning profiles only; free Apple ID via Xcode / AltStore
 │   └── packet_tunnel.go            PacketTunnel — gVisor netstack + TCP-forwarder→SOCKS5 + DNS-over-TCP shim
 ├── ios-client/
 │   ├── project.yml                 XcodeGen spec — the .xcodeproj is generated, not committed
-│   ├── DNSpire/                    SwiftUI app sources (in-app browser path)
+│   ├── DNSpire/                    SwiftUI app sources (local proxy + VPN UI)
 │   ├── DNSpirePacketTunnel/        NEPacketTunnelProvider extension (system VPN path)
 │   └── Frameworks/                 gomobile output (DNSpireCore.xcframework) drops here
 ├── scripts/
@@ -111,23 +110,22 @@ The resolvers list (Cloudflare/Google/Quad9 entries pre-populated) is what the
 client uses to reach the server; it does not need to match anything on the
 server side.
 
-## How the in-app browser works
+## How local proxy mode works
 
 The Go client opens a SOCKS5 server on `127.0.0.1:18000` (configurable). The
-Swift side creates a `WKWebView` whose `WKWebsiteDataStore` is configured with
-a `ProxyConfiguration(socksv5Proxy:)` pointing at that endpoint. WebKit on iOS
-17+ honours per-data-store proxy settings, so all traffic from that web view
-flows through the DNS tunnel.
+Swift side starts and stops that Go client, then shows the host and port for
+external proxy clients. Configure Happ, Shadowrocket, or a similar app to use
+`127.0.0.1` and port `18000` as a SOCKS5 proxy.
 
-This **only** affects the in-app browser. The rest of the system continues to
-use the device's normal network path. That's the trade-off versus a Packet
-Tunnel: simpler distribution, narrower scope.
+This **only** affects apps that explicitly use the local SOCKS5 proxy. The rest
+of the system continues to use the device's normal network path. That's the
+trade-off versus a Packet Tunnel: simpler distribution, narrower scope.
 
 ## How system-wide VPN works
 
 The `DNSpirePacketTunnel` extension hosts:
 
-1. The MasterDnsVPN Go client (same one the in-app browser uses) — opens a
+1. The MasterDnsVPN Go client (same one local proxy mode uses) — opens a
    loopback SOCKS5 listener on `127.0.0.1:18000` inside the extension process.
 2. A gVisor `stack.Stack` with a `channel.Endpoint` that bridges to
    `NEPacketTunnelFlow`. Swift reads packets from iOS, calls

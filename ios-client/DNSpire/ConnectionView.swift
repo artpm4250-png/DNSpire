@@ -1,11 +1,13 @@
 import SwiftUI
 
 enum TunnelMode: String, CaseIterable, Identifiable {
-    case browser, systemVPN
+    case proxy, systemVPN
+
     var id: String { rawValue }
+
     var label: String {
         switch self {
-        case .browser:   return "In-app browser"
+        case .proxy:     return "SOCKS5 Proxy"
         case .systemVPN: return "System-wide VPN"
         }
     }
@@ -17,10 +19,17 @@ struct ConnectionView: View {
     @EnvironmentObject var logStore: LogStore
     @EnvironmentObject var vpn: VPNManager
 
-    @AppStorage("DNSpire.tunnelMode") private var modeRaw: String = TunnelMode.browser.rawValue
+    @AppStorage("DNSpire.tunnelMode") private var modeRaw: String = TunnelMode.proxy.rawValue
 
     private var mode: TunnelMode {
-        get { TunnelMode(rawValue: modeRaw) ?? .browser }
+        get { TunnelMode(rawValue: modeRaw) ?? .proxy }
+    }
+
+    private var modeSelection: Binding<TunnelMode> {
+        Binding(
+            get: { mode },
+            set: { modeRaw = $0.rawValue }
+        )
     }
 
     var body: some View {
@@ -29,8 +38,12 @@ struct ConnectionView: View {
                 VStack(spacing: 24) {
                     modePicker
 
-                    if mode == .browser {
-                        StatusBadge(status: tunnel.status, detail: tunnel.statusDetail)
+                    if mode == .proxy {
+                        StatusBadge(
+                            status: tunnel.status,
+                            detail: tunnel.statusDetail,
+                            isProxyReady: tunnel.isProxyReady
+                        )
                             .padding(.top, 8)
                     } else {
                         VPNBadge(status: vpn.status)
@@ -39,9 +52,8 @@ struct ConnectionView: View {
 
                     actionButton
 
-                    if mode == .browser, !tunnel.socksAddress.isEmpty {
-                        InfoCard(title: "Local SOCKS5", value: tunnel.socksAddress,
-                                 systemImage: "network")
+                    if mode == .proxy, !tunnel.socksAddress.isEmpty {
+                        ProxyCard(address: tunnel.socksAddress)
                     }
 
                     if let err = currentError {
@@ -66,13 +78,13 @@ struct ConnectionView: View {
     }
 
     private var currentError: String? {
-        mode == .browser ? tunnel.lastError : vpn.lastError
+        mode == .proxy ? tunnel.lastError : vpn.lastError
     }
 
     private var modePicker: some View {
-        Picker("Mode", selection: $modeRaw) {
+        Picker("Mode", selection: modeSelection) {
             ForEach(TunnelMode.allCases) { m in
-                Text(m.label).tag(m.rawValue)
+                Text(m.label).tag(m)
             }
         }
         .pickerStyle(.segmented)
@@ -82,13 +94,13 @@ struct ConnectionView: View {
     @ViewBuilder
     private var actionButton: some View {
         switch mode {
-        case .browser:   browserActionButton
+        case .proxy:     proxyActionButton
         case .systemVPN: systemActionButton
         }
     }
 
     @ViewBuilder
-    private var browserActionButton: some View {
+    private var proxyActionButton: some View {
         let isRunning = tunnel.status != .stopped && tunnel.status != .error
         Button {
             if isRunning {
@@ -185,6 +197,7 @@ struct ConnectionView: View {
 private struct StatusBadge: View {
     let status: TunnelStatus
     let detail: String
+    let isProxyReady: Bool
 
     var body: some View {
         VStack(spacing: 8) {
@@ -198,10 +211,10 @@ private struct StatusBadge: View {
                 )
                 .overlay(
                     Circle().stroke(color.opacity(0.3), lineWidth: 8)
-                        .scaleEffect(status == .connected ? 1.2 : 1.0)
-                        .opacity(status == .connected ? 0.0 : 0.6)
+                        .scaleEffect(isProxyReady ? 1.2 : 1.0)
+                        .opacity(isProxyReady ? 0.0 : 0.6)
                         .animation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true),
-                                   value: status)
+                                   value: isProxyReady)
                 )
             Text(label).font(.headline)
             if !detail.isEmpty {
@@ -211,6 +224,9 @@ private struct StatusBadge: View {
     }
 
     private var label: String {
+        if isProxyReady {
+            return "Proxy ready"
+        }
         switch status {
         case .stopped: return "Disconnected"
         case .starting: return "Starting…"
@@ -223,6 +239,9 @@ private struct StatusBadge: View {
     }
 
     private var color: Color {
+        if isProxyReady {
+            return .green
+        }
         switch status {
         case .stopped: return .gray
         case .connected: return .green
@@ -232,6 +251,9 @@ private struct StatusBadge: View {
     }
 
     private var icon: String {
+        if isProxyReady {
+            return "checkmark"
+        }
         switch status {
         case .stopped: return "bolt.slash.fill"
         case .connected: return "checkmark"
@@ -289,23 +311,47 @@ private struct VPNBadge: View {
     }
 }
 
-private struct InfoCard: View {
-    let title: String
-    let value: String
-    let systemImage: String
+private struct ProxyCard: View {
+    let address: String
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: systemImage).font(.title2)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.caption).foregroundStyle(.secondary)
-                Text(value).font(.body).monospaced()
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: "network").font(.title2)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Local SOCKS5").font(.caption).foregroundStyle(.secondary)
+                    Text(address).font(.body).monospaced()
+                }
+                Spacer()
             }
-            Spacer()
+            Divider()
+            row("Host", host)
+            row("Port", port)
         }
         .padding()
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var parts: [Substring] {
+        address.split(separator: ":", maxSplits: 1)
+    }
+
+    private var host: String {
+        String(parts.first ?? "127.0.0.1")
+    }
+
+    private var port: String {
+        parts.count > 1 ? String(parts[1]) : "18000"
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Text(value).monospaced()
+        }
+        .font(.subheadline)
     }
 }
 

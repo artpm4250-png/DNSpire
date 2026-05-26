@@ -5,8 +5,6 @@ struct RootView: View {
         TabView {
             ConnectionView()
                 .tabItem { Label("Connect", systemImage: "bolt.horizontal.circle") }
-            BrowserView()
-                .tabItem { Label("Browser", systemImage: "safari") }
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
             LogsView()

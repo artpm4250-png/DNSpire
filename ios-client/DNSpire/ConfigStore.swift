@@ -10,7 +10,7 @@ struct ClientConfigDraft: Codable, Equatable {
     var encryptionKey: String
     /// 0=None, 1=XOR, 2=ChaCha20, 3=AES-128-GCM, 4=AES-192-GCM, 5=AES-256-GCM.
     var dataEncryptionMethod: Int
-    /// "SOCKS5" or "TCP". For the in-app browser, must be SOCKS5.
+    /// "SOCKS5" or "TCP". For local proxy mode, must be SOCKS5.
     var protocolType: String
     var listenIP: String
     var listenPort: Int
