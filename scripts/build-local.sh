@@ -33,11 +33,14 @@ echo "==> Staging mobile-overlay into upstream/mobile"
 mkdir -p upstream/mobile
 cp -R mobile-overlay/. upstream/mobile/
 
-echo "==> Fetching extra deps for PacketTunnel (gVisor + golang.org/x/net)"
-# These are not in upstream's go.mod, so we add them transparently. Edits to
-# upstream/go.mod and upstream/go.sum are intentionally local and not committed.
+echo "==> Fetching extra deps for PacketTunnel (gomobile bind + gVisor + x/net)"
+# gomobile bind (Go 1.21+) requires golang.org/x/mobile in the current
+# module's dependency graph. gVisor + golang.org/x/net are used by
+# mobile-overlay/packet_tunnel.go. Edits to upstream/go.mod and upstream/go.sum
+# are intentionally local and not committed.
 (cd upstream && \
   go get \
+    golang.org/x/mobile/bind \
     gvisor.dev/gvisor@go \
     golang.org/x/net \
     golang.org/x/exp \
