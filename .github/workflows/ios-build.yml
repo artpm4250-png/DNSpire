@@ -89,6 +89,21 @@ jobs:
             "${MOBILE_GO_PKG}"
           ls -la "../ios-client/Frameworks/${MOBILE_FRAMEWORK_NAME}.xcframework"
 
+      - name: Dump generated framework headers
+        run: |
+          set -eux
+          fw="ios-client/Frameworks/${MOBILE_FRAMEWORK_NAME}.xcframework/ios-arm64_x86_64-simulator/${MOBILE_FRAMEWORK_NAME}.framework"
+          echo "=== framework tree ==="
+          find "$fw" -maxdepth 3
+          echo "=== Modules ==="
+          ls -la "$fw/Modules" || true
+          echo "=== Headers ==="
+          ls -la "$fw/Headers"
+          for h in "$fw/Headers"/*.h; do
+            echo "----- $h -----"
+            cat "$h"
+          done
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
