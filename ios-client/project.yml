@@ -6,6 +6,11 @@ options:
   developmentLanguage: en
   createIntermediateGroups: true
   generateEmptyDirectories: true
+  # Xcode 15.4 (the CI toolchain) tops out at pbxproj objectVersion 56.
+  # XcodeGen defaults to 77 on newer Homebrew releases, which Xcode 15.4
+  # refuses to open ("future Xcode project file format (77)").
+  xcodeVersion: "15.0"
+  objectVersion: 56
 
 settings:
   base:
