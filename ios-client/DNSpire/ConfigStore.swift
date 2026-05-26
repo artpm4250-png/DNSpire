@@ -1,10 +1,6 @@
 import Foundation
 import Combine
 
-/// User-editable subset of the upstream MasterDnsVPN client config. Heavy /
-/// performance-tuning knobs (worker counts, ARQ timings, MTU bounds) are kept
-/// at upstream defaults — exposing them in the UI would clutter the form and
-/// most users only need to fill in tunnel identity + resolvers.
 struct ClientConfigDraft: Codable, Equatable {
     var domains: [String]
     var encryptionKey: String
@@ -20,6 +16,17 @@ struct ClientConfigDraft: Codable, Equatable {
     var resolvers: [ResolverEntry]
     /// One of "DEBUG", "INFO", "WARN", "ERROR".
     var logLevel: String
+    var uploadCompressionType: Int
+    var downloadCompressionType: Int
+    var compressionMinSize: Int
+    var mtuTestRetries: Int
+    var mtuTestTimeout: Double
+    var mtuTestParallelism: Int
+    var packetDuplicationCount: Int
+    var setupPacketDuplicationCount: Int
+    var rxTxWorkers: Int
+    var maxPacketsPerBatch: Int
+    var arqWindowSize: Int
 
     static let `default` = ClientConfigDraft(
         domains: ["v.example.com"],
@@ -31,9 +38,105 @@ struct ClientConfigDraft: Codable, Equatable {
         socks5AuthEnabled: false,
         socks5User: "master_dns_vpn",
         socks5Pass: "master_dns_vpn",
-        resolvers: ResolverEntry.defaultPublic,
-        logLevel: "INFO"
+        resolvers: [],
+        logLevel: "INFO",
+        uploadCompressionType: 0,
+        downloadCompressionType: 0,
+        compressionMinSize: 100,
+        mtuTestRetries: 2,
+        mtuTestTimeout: 2.0,
+        mtuTestParallelism: 16,
+        packetDuplicationCount: 2,
+        setupPacketDuplicationCount: 2,
+        rxTxWorkers: 4,
+        maxPacketsPerBatch: 8,
+        arqWindowSize: 600
     )
+
+    enum CodingKeys: String, CodingKey {
+        case domains, encryptionKey, dataEncryptionMethod, protocolType, listenIP, listenPort
+        case socks5AuthEnabled, socks5User, socks5Pass, resolvers, logLevel
+        case uploadCompressionType, downloadCompressionType, compressionMinSize
+        case mtuTestRetries, mtuTestTimeout, mtuTestParallelism
+        case packetDuplicationCount, setupPacketDuplicationCount
+        case rxTxWorkers, maxPacketsPerBatch, arqWindowSize
+    }
+
+    init(domains: [String],
+         encryptionKey: String,
+         dataEncryptionMethod: Int,
+         protocolType: String,
+         listenIP: String,
+         listenPort: Int,
+         socks5AuthEnabled: Bool,
+         socks5User: String,
+         socks5Pass: String,
+         resolvers: [ResolverEntry],
+         logLevel: String,
+         uploadCompressionType: Int,
+         downloadCompressionType: Int,
+         compressionMinSize: Int,
+         mtuTestRetries: Int,
+         mtuTestTimeout: Double,
+         mtuTestParallelism: Int,
+         packetDuplicationCount: Int,
+         setupPacketDuplicationCount: Int,
+         rxTxWorkers: Int,
+         maxPacketsPerBatch: Int,
+         arqWindowSize: Int) {
+        self.domains = domains
+        self.encryptionKey = encryptionKey
+        self.dataEncryptionMethod = dataEncryptionMethod
+        self.protocolType = protocolType
+        self.listenIP = listenIP
+        self.listenPort = listenPort
+        self.socks5AuthEnabled = socks5AuthEnabled
+        self.socks5User = socks5User
+        self.socks5Pass = socks5Pass
+        self.resolvers = resolvers
+        self.logLevel = logLevel
+        self.uploadCompressionType = uploadCompressionType
+        self.downloadCompressionType = downloadCompressionType
+        self.compressionMinSize = compressionMinSize
+        self.mtuTestRetries = mtuTestRetries
+        self.mtuTestTimeout = mtuTestTimeout
+        self.mtuTestParallelism = mtuTestParallelism
+        self.packetDuplicationCount = packetDuplicationCount
+        self.setupPacketDuplicationCount = setupPacketDuplicationCount
+        self.rxTxWorkers = rxTxWorkers
+        self.maxPacketsPerBatch = maxPacketsPerBatch
+        self.arqWindowSize = arqWindowSize
+    }
+
+    init(from decoder: Decoder) throws {
+        let fallback = ClientConfigDraft.default
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        domains = try container.decodeIfPresent([String].self, forKey: .domains) ?? fallback.domains
+        encryptionKey = try container.decodeIfPresent(String.self, forKey: .encryptionKey) ?? fallback.encryptionKey
+        dataEncryptionMethod = try container.decodeIfPresent(Int.self, forKey: .dataEncryptionMethod) ?? fallback.dataEncryptionMethod
+        protocolType = try container.decodeIfPresent(String.self, forKey: .protocolType) ?? fallback.protocolType
+        listenIP = try container.decodeIfPresent(String.self, forKey: .listenIP) ?? fallback.listenIP
+        listenPort = try container.decodeIfPresent(Int.self, forKey: .listenPort) ?? fallback.listenPort
+        socks5AuthEnabled = try container.decodeIfPresent(Bool.self, forKey: .socks5AuthEnabled) ?? fallback.socks5AuthEnabled
+        socks5User = try container.decodeIfPresent(String.self, forKey: .socks5User) ?? fallback.socks5User
+        socks5Pass = try container.decodeIfPresent(String.self, forKey: .socks5Pass) ?? fallback.socks5Pass
+        resolvers = try container.decodeIfPresent([ResolverEntry].self, forKey: .resolvers) ?? fallback.resolvers
+        if ResolverEntry.matchesOldDefaultPublic(resolvers) {
+            resolvers = []
+        }
+        logLevel = try container.decodeIfPresent(String.self, forKey: .logLevel) ?? fallback.logLevel
+        uploadCompressionType = try container.decodeIfPresent(Int.self, forKey: .uploadCompressionType) ?? fallback.uploadCompressionType
+        downloadCompressionType = try container.decodeIfPresent(Int.self, forKey: .downloadCompressionType) ?? fallback.downloadCompressionType
+        compressionMinSize = try container.decodeIfPresent(Int.self, forKey: .compressionMinSize) ?? fallback.compressionMinSize
+        mtuTestRetries = try container.decodeIfPresent(Int.self, forKey: .mtuTestRetries) ?? fallback.mtuTestRetries
+        mtuTestTimeout = try container.decodeIfPresent(Double.self, forKey: .mtuTestTimeout) ?? fallback.mtuTestTimeout
+        mtuTestParallelism = try container.decodeIfPresent(Int.self, forKey: .mtuTestParallelism) ?? fallback.mtuTestParallelism
+        packetDuplicationCount = try container.decodeIfPresent(Int.self, forKey: .packetDuplicationCount) ?? fallback.packetDuplicationCount
+        setupPacketDuplicationCount = try container.decodeIfPresent(Int.self, forKey: .setupPacketDuplicationCount) ?? fallback.setupPacketDuplicationCount
+        rxTxWorkers = try container.decodeIfPresent(Int.self, forKey: .rxTxWorkers) ?? fallback.rxTxWorkers
+        maxPacketsPerBatch = try container.decodeIfPresent(Int.self, forKey: .maxPacketsPerBatch) ?? fallback.maxPacketsPerBatch
+        arqWindowSize = try container.decodeIfPresent(Int.self, forKey: .arqWindowSize) ?? fallback.arqWindowSize
+    }
 }
 
 struct ResolverEntry: Codable, Equatable, Identifiable {
@@ -44,13 +147,56 @@ struct ResolverEntry: Codable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey { case ip, port, enabled }
 
-    static let defaultPublic: [ResolverEntry] = [
+    static let oldDefaultPublic: [ResolverEntry] = [
         .init(ip: "1.1.1.1", port: 53, enabled: true),
         .init(ip: "8.8.8.8", port: 53, enabled: true),
         .init(ip: "9.9.9.9", port: 53, enabled: true),
         .init(ip: "1.0.0.1", port: 53, enabled: true),
         .init(ip: "8.8.4.4", port: 53, enabled: true)
     ]
+
+    var displayAddress: String {
+        let cleanIP = ip.trimmingCharacters(in: .whitespacesAndNewlines)
+        return port == 53 ? cleanIP : "\(cleanIP):\(port)"
+    }
+
+    static func parseList(_ text: String) -> [ResolverEntry] {
+        text
+            .components(separatedBy: CharacterSet(charactersIn: ",\n"))
+            .compactMap { parse($0) }
+    }
+
+    static func matchesOldDefaultPublic(_ resolvers: [ResolverEntry]) -> Bool {
+        let current = resolvers.map { ($0.ip, $0.port, $0.enabled) }
+        let old = oldDefaultPublic.map { ($0.ip, $0.port, $0.enabled) }
+        return current.elementsEqual(old) { lhs, rhs in
+            lhs.0 == rhs.0 && lhs.1 == rhs.1 && lhs.2 == rhs.2
+        }
+    }
+
+    private static func parse(_ raw: String) -> ResolverEntry? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+
+        if value.hasPrefix("["),
+           let closing = value.firstIndex(of: "]") {
+            let host = String(value[value.index(after: value.startIndex)..<closing])
+            let rest = String(value[value.index(after: closing)...])
+            let port = rest.hasPrefix(":") ? Int(rest.dropFirst()) ?? 53 : 53
+            return .init(ip: host, port: port, enabled: true)
+        }
+
+        let colonCount = value.filter { $0 == ":" }.count
+        if colonCount == 1,
+           let colon = value.firstIndex(of: ":"),
+           let port = Int(value[value.index(after: colon)...]) {
+            let host = String(value[..<colon]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !host.isEmpty else { return nil }
+            return .init(ip: host, port: port, enabled: true)
+        }
+
+        return .init(ip: value, port: 53, enabled: true)
+    }
 }
 
 @MainActor
@@ -98,8 +244,17 @@ final class ConfigStore: ObservableObject {
             "SOCKS5_USER": draft.socks5User,
             "SOCKS5_PASS": draft.socks5Pass,
             "LOG_LEVEL": draft.logLevel,
-            "MTU_TEST_RETRIES": 2,
-            "MTU_TEST_TIMEOUT": 2.0
+            "UPLOAD_COMPRESSION_TYPE": draft.uploadCompressionType,
+            "DOWNLOAD_COMPRESSION_TYPE": draft.downloadCompressionType,
+            "COMPRESSION_MIN_SIZE": draft.compressionMinSize,
+            "MTU_TEST_RETRIES": draft.mtuTestRetries,
+            "MTU_TEST_TIMEOUT": draft.mtuTestTimeout,
+            "MTU_TEST_PARALLELISM": draft.mtuTestParallelism,
+            "PACKET_DUPLICATION_COUNT": draft.packetDuplicationCount,
+            "SETUP_PACKET_DUPLICATION_COUNT": draft.setupPacketDuplicationCount,
+            "RX_TX_WORKERS": draft.rxTxWorkers,
+            "MAX_PACKETS_PER_BATCH": draft.maxPacketsPerBatch,
+            "ARQ_WINDOW_SIZE": draft.arqWindowSize
         ]
 
         guard let data = try? JSONSerialization.data(withJSONObject: dict, options: []) else {
@@ -113,7 +268,11 @@ final class ConfigStore: ObservableObject {
     func encodedResolversText() -> String {
         draft.resolvers
             .filter { $0.enabled }
-            .map { $0.port == 53 ? $0.ip : "\($0.ip):\($0.port)" }
+            .map { resolver in
+                let ip = resolver.ip.trimmingCharacters(in: .whitespacesAndNewlines)
+                return resolver.port == 53 ? ip : "\(ip):\(resolver.port)"
+            }
+            .filter { !$0.isEmpty }
             .joined(separator: "\n")
     }
 

@@ -106,9 +106,9 @@ The values you need to copy into the iOS app's **Settings** tab:
 | `encrypt_key.txt`      | Encryption key          |
 | `DATA_ENCRYPTION_METHOD` | Encryption method     |
 
-The resolvers list (Cloudflare/Google/Quad9 entries pre-populated) is what the
-client uses to reach the server; it does not need to match anything on the
-server side.
+The resolvers list is what the client uses to reach the server; it does not
+need to match anything on the server side. In the iOS app, open **Settings →
+Resolvers** and paste one resolver per line or a comma-separated list.
 
 ## How local proxy mode works
 
@@ -136,8 +136,8 @@ The `DNSpirePacketTunnel` extension hosts:
    loopback SOCKS5. Two goroutines pipe bytes both ways.
 4. A UDP-53 interceptor at the link-endpoint level: DNS queries are unwrapped
    from their UDP envelope, sent as DNS-over-TCP through SOCKS5 to a public
-   resolver (default 1.1.1.1:53), and the response is re-wrapped as a UDP IP
-   packet back to the originating address. All other UDP is silently dropped.
+   resolver, and the response is re-wrapped as a UDP IP packet back to the
+   originating address. All other UDP is silently dropped.
 
 ### Constraints
 

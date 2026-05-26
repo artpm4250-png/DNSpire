@@ -74,7 +74,7 @@ struct ConnectionView: View {
     private var canConnect: Bool {
         !configStore.draft.encryptionKey.isEmpty &&
         !configStore.draft.domains.allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty } &&
-        configStore.draft.resolvers.contains(where: { $0.enabled })
+        !configStore.encodedResolversText().isEmpty
     }
 
     private var currentError: String? {
@@ -157,8 +157,7 @@ struct ConnectionView: View {
             row("Domains", configStore.draft.domains.joined(separator: ", "))
             row("Encryption", encryptionLabel(configStore.draft.dataEncryptionMethod))
             row("Mode", configStore.draft.protocolType)
-            row("Resolvers enabled",
-                "\(configStore.draft.resolvers.filter { $0.enabled }.count) / \(configStore.draft.resolvers.count)")
+            row("Resolvers", "\(enabledResolverCount)")
         }
         .padding()
         .background(Color(.secondarySystemBackground))
@@ -179,6 +178,12 @@ struct ConnectionView: View {
             Text(value).multilineTextAlignment(.trailing)
         }
         .font(.subheadline)
+    }
+
+    private var enabledResolverCount: Int {
+        configStore.draft.resolvers.filter {
+            $0.enabled && !$0.ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }.count
     }
 
     private func encryptionLabel(_ method: Int) -> String {

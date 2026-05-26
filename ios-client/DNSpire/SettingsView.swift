@@ -57,6 +57,50 @@ struct SettingsView: View {
                     ResolverEditor(resolvers: $configStore.draft.resolvers)
                 }
 
+                Section("Performance") {
+                    Picker("Upload compression", selection: $configStore.draft.uploadCompressionType) {
+                        ForEach(CompressionOption.allCases) { option in
+                            Text(option.label).tag(option.rawValue)
+                        }
+                    }
+                    Picker("Download compression", selection: $configStore.draft.downloadCompressionType) {
+                        ForEach(CompressionOption.allCases) { option in
+                            Text(option.label).tag(option.rawValue)
+                        }
+                    }
+                    Stepper("Compression min size: \(configStore.draft.compressionMinSize)",
+                            value: $configStore.draft.compressionMinSize,
+                            in: 100...65535,
+                            step: 50)
+                    Stepper("MTU retries: \(configStore.draft.mtuTestRetries)",
+                            value: $configStore.draft.mtuTestRetries,
+                            in: 1...10)
+                    LabeledContent("MTU timeout") {
+                        TextField("2.0", value: $configStore.draft.mtuTestTimeout, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Stepper("MTU parallelism: \(configStore.draft.mtuTestParallelism)",
+                            value: $configStore.draft.mtuTestParallelism,
+                            in: 1...128)
+                    Stepper("Packet duplication: \(configStore.draft.packetDuplicationCount)",
+                            value: $configStore.draft.packetDuplicationCount,
+                            in: 1...8)
+                    Stepper("Setup duplication: \(configStore.draft.setupPacketDuplicationCount)",
+                            value: $configStore.draft.setupPacketDuplicationCount,
+                            in: 1...8)
+                    Stepper("RX/TX workers: \(configStore.draft.rxTxWorkers)",
+                            value: $configStore.draft.rxTxWorkers,
+                            in: 1...32)
+                    Stepper("Batch size: \(configStore.draft.maxPacketsPerBatch)",
+                            value: $configStore.draft.maxPacketsPerBatch,
+                            in: 1...64)
+                    Stepper("ARQ window: \(configStore.draft.arqWindowSize)",
+                            value: $configStore.draft.arqWindowSize,
+                            in: 1...8000,
+                            step: 50)
+                }
+
                 Section("Logging") {
                     Picker("Log level", selection: $configStore.draft.logLevel) {
                         Text("DEBUG").tag("DEBUG")
@@ -73,6 +117,24 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+        }
+    }
+}
+
+private enum CompressionOption: Int, CaseIterable, Identifiable {
+    case off = 0
+    case zstd = 1
+    case lz4 = 2
+    case zlib = 3
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .off:  return "Off"
+        case .zstd: return "ZSTD"
+        case .lz4:  return "LZ4"
+        case .zlib: return "ZLIB"
         }
     }
 }
@@ -105,28 +167,77 @@ private struct DomainsEditor: View {
 
 private struct ResolverEditor: View {
     @Binding var resolvers: [ResolverEntry]
+    @State private var showingEditor = false
+    @State private var editorText = ""
 
     var body: some View {
-        ForEach(Array(resolvers.enumerated()), id: \.element.id) { idx, _ in
-            HStack(spacing: 8) {
-                Toggle("", isOn: $resolvers[idx].enabled).labelsHidden()
-                TextField("IP", text: $resolvers[idx].ip)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.numbersAndPunctuation)
-                TextField("Port", value: $resolvers[idx].port, format: .number)
-                    .keyboardType(.numberPad)
-                    .frame(width: 60)
-                Button(role: .destructive) {
-                    resolvers.remove(at: idx)
-                } label: { Image(systemName: "minus.circle.fill") }
-                .buttonStyle(.borderless)
+        Button {
+            editorText = resolverText
+            showingEditor = true
+        } label: {
+            HStack {
+                Label("Edit resolvers", systemImage: "square.and.pencil")
+                Spacer()
+                Text("\(activeResolvers.count)")
+                    .foregroundStyle(.secondary)
             }
         }
-        Button {
-            resolvers.append(.init(ip: "", port: 53, enabled: true))
-        } label: {
-            Label("Add resolver", systemImage: "plus.circle")
+
+        if activeResolvers.isEmpty {
+            Text("No resolvers")
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(activeResolvers.prefix(6)) { resolver in
+                Text(resolver.displayAddress)
+                    .font(.subheadline)
+                    .monospaced()
+            }
+            if activeResolvers.count > 6 {
+                Text("+\(activeResolvers.count - 6)")
+                    .foregroundStyle(.secondary)
+            }
         }
+        .sheet(isPresented: $showingEditor) {
+            NavigationStack {
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $editorText)
+                        .font(.body.monospaced())
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.numbersAndPunctuation)
+                        .padding(12)
+                    if editorText.isEmpty {
+                        Text("192.0.2.10, 192.0.2.11\n192.0.2.12")
+                            .font(.body.monospaced())
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 17)
+                            .padding(.vertical, 20)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .navigationTitle("Resolvers")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showingEditor = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Apply") {
+                            resolvers = ResolverEntry.parseList(editorText)
+                            showingEditor = false
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var activeResolvers: [ResolverEntry] {
+        resolvers
+            .filter { $0.enabled && !$0.ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    private var resolverText: String {
+        activeResolvers.map(\.displayAddress).joined(separator: "\n")
     }
 }
