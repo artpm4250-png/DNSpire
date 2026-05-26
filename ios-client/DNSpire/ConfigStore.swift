@@ -14,6 +14,7 @@ struct ClientConfigDraft: Codable, Equatable {
     var socks5User: String
     var socks5Pass: String
     var resolvers: [ResolverEntry]
+    var resolverBalancingStrategy: Int
     /// One of "DEBUG", "INFO", "WARN", "ERROR".
     var logLevel: String
     var uploadCompressionType: Int
@@ -39,6 +40,7 @@ struct ClientConfigDraft: Codable, Equatable {
         socks5User: "master_dns_vpn",
         socks5Pass: "master_dns_vpn",
         resolvers: [],
+        resolverBalancingStrategy: 2,
         logLevel: "INFO",
         uploadCompressionType: 0,
         downloadCompressionType: 0,
@@ -55,7 +57,7 @@ struct ClientConfigDraft: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case domains, encryptionKey, dataEncryptionMethod, protocolType, listenIP, listenPort
-        case socks5AuthEnabled, socks5User, socks5Pass, resolvers, logLevel
+        case socks5AuthEnabled, socks5User, socks5Pass, resolvers, resolverBalancingStrategy, logLevel
         case uploadCompressionType, downloadCompressionType, compressionMinSize
         case mtuTestRetries, mtuTestTimeout, mtuTestParallelism
         case packetDuplicationCount, setupPacketDuplicationCount
@@ -72,6 +74,7 @@ struct ClientConfigDraft: Codable, Equatable {
          socks5User: String,
          socks5Pass: String,
          resolvers: [ResolverEntry],
+         resolverBalancingStrategy: Int,
          logLevel: String,
          uploadCompressionType: Int,
          downloadCompressionType: Int,
@@ -94,6 +97,7 @@ struct ClientConfigDraft: Codable, Equatable {
         self.socks5User = socks5User
         self.socks5Pass = socks5Pass
         self.resolvers = resolvers
+        self.resolverBalancingStrategy = resolverBalancingStrategy
         self.logLevel = logLevel
         self.uploadCompressionType = uploadCompressionType
         self.downloadCompressionType = downloadCompressionType
@@ -124,6 +128,7 @@ struct ClientConfigDraft: Codable, Equatable {
         if ResolverEntry.matchesOldDefaultPublic(resolvers) {
             resolvers = []
         }
+        resolverBalancingStrategy = try container.decodeIfPresent(Int.self, forKey: .resolverBalancingStrategy) ?? fallback.resolverBalancingStrategy
         logLevel = try container.decodeIfPresent(String.self, forKey: .logLevel) ?? fallback.logLevel
         uploadCompressionType = try container.decodeIfPresent(Int.self, forKey: .uploadCompressionType) ?? fallback.uploadCompressionType
         downloadCompressionType = try container.decodeIfPresent(Int.self, forKey: .downloadCompressionType) ?? fallback.downloadCompressionType
@@ -243,6 +248,7 @@ final class ConfigStore: ObservableObject {
             "SOCKS5_AUTH": draft.socks5AuthEnabled,
             "SOCKS5_USER": draft.socks5User,
             "SOCKS5_PASS": draft.socks5Pass,
+            "RESOLVER_BALANCING_STRATEGY": draft.resolverBalancingStrategy,
             "LOG_LEVEL": draft.logLevel,
             "UPLOAD_COMPRESSION_TYPE": draft.uploadCompressionType,
             "DOWNLOAD_COMPRESSION_TYPE": draft.downloadCompressionType,

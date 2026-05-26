@@ -58,6 +58,11 @@ struct SettingsView: View {
                 }
 
                 Section("Performance") {
+                    Picker("Resolving strategy", selection: $configStore.draft.resolverBalancingStrategy) {
+                        ForEach(ResolverBalancingOption.allCases) { option in
+                            Text(option.label).tag(option.rawValue)
+                        }
+                    }
                     Picker("Upload compression", selection: $configStore.draft.uploadCompressionType) {
                         ForEach(CompressionOption.allCases) { option in
                             Text(option.label).tag(option.rawValue)
@@ -117,6 +122,34 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+        }
+    }
+}
+
+private enum ResolverBalancingOption: Int, CaseIterable, Identifiable {
+    case roundRobinDefault = 0
+    case random = 1
+    case roundRobin = 2
+    case leastLoss = 3
+    case lowestLatency = 4
+    case hybridScore = 5
+    case lossThenLatency = 6
+    case leastLossTopRandom = 7
+    case leastLossTopRoundRobin = 8
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .roundRobinDefault:      return "Round-robin default"
+        case .random:                 return "Random"
+        case .roundRobin:             return "Round-robin"
+        case .leastLoss:              return "Least loss"
+        case .lowestLatency:          return "Lowest latency"
+        case .hybridScore:            return "Hybrid score"
+        case .lossThenLatency:        return "Loss then latency"
+        case .leastLossTopRandom:     return "Least loss top random"
+        case .leastLossTopRoundRobin: return "Least loss top round-robin"
         }
     }
 }
