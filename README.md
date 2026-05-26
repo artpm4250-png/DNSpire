@@ -7,32 +7,42 @@ in-app `WKWebView` browser.
 
 ## Status
 
-**v1 — in-app browser only.** The app spawns the Go client in-process, which
-opens a local SOCKS5 listener on `127.0.0.1:18000`. The built-in **Browser** tab
-routes WebKit traffic through that SOCKS5 (via `WKWebsiteDataStore.proxyConfigurations`,
-iOS 17+). No `NEPacketTunnelProvider` extension, no `NetworkExtension`
-entitlement — sideloads cleanly with any Apple ID.
+Two operating modes, selectable in the **Connect** tab:
 
-**v2 (not implemented)** would add a Packet Tunnel extension with an in-process
-TCP/IP stack (tun2socks) so the whole system routes through the tunnel. That
-requires the NetworkExtension entitlement and a `gVisor`-based stack — left for
-a follow-up.
+**1. In-app browser (works with free Apple ID).** The app spawns the Go client
+in-process, which opens a local SOCKS5 listener on `127.0.0.1:18000`. The
+built-in **Browser** tab routes WebKit traffic through that SOCKS5 (via
+`WKWebsiteDataStore.proxyConfigurations`, iOS 17+). No NetworkExtension
+entitlement needed — sideloads cleanly with any Apple ID.
+
+**2. System-wide VPN (requires paid Apple Developer account).** An
+`NEPacketTunnelProvider` extension hosts the same Go client plus a userspace
+TCP/IP stack (gVisor netstack). The extension claims the default route via
+`NETunnelProviderManager`, so every TCP flow on the device — every app, not
+just our browser — is funnelled through the DNS tunnel. UDP-53 is shimmed onto
+DNS-over-TCP; all other UDP is dropped (QUIC falls back to TCP). The
+`com.apple.developer.networking.networkextension` entitlement is gated to
+paid-account provisioning profiles only; free Apple ID via Xcode / AltStore
+**cannot** install this mode — the extension target will refuse to load.
 
 ## Layout
 
 ```
 .
-├── upstream/                   git submodule — clean clone of masterking32/MasterDnsVPN
-├── mobile-overlay/             Go wrapper sources. Copied into upstream/mobile/ at build time
-│                               so it can import upstream's internal/ packages without forking.
+├── upstream/                       git submodule — clean clone of masterking32/MasterDnsVPN
+├── mobile-overlay/                 Go wrapper sources. Copied into upstream/mobile/ at build time
+│                                   so it can import upstream's internal/ packages without forking.
+│   ├── mobile.go                   Tunnel facade — boots the MasterDnsVPN client + SOCKS5 listener
+│   └── packet_tunnel.go            PacketTunnel — gVisor netstack + TCP-forwarder→SOCKS5 + DNS-over-TCP shim
 ├── ios-client/
-│   ├── project.yml             XcodeGen spec — the .xcodeproj is generated, not committed
-│   ├── DNSpire/                SwiftUI sources
-│   └── Frameworks/             gomobile output (DNSpireCore.xcframework) drops here
+│   ├── project.yml                 XcodeGen spec — the .xcodeproj is generated, not committed
+│   ├── DNSpire/                    SwiftUI app sources (in-app browser path)
+│   ├── DNSpirePacketTunnel/        NEPacketTunnelProvider extension (system VPN path)
+│   └── Frameworks/                 gomobile output (DNSpireCore.xcframework) drops here
 ├── scripts/
-│   └── build-local.sh          Local build on a Mac (mirrors CI)
+│   └── build-local.sh              Local build on a Mac (mirrors CI)
 └── .github/workflows/
-    └── ios-build.yml           macos-14 runner: gomobile bind + xcodebuild
+    └── ios-build.yml               macos-14 runner: gomobile bind + xcodebuild
 ```
 
 ## Build
@@ -113,19 +123,40 @@ This **only** affects the in-app browser. The rest of the system continues to
 use the device's normal network path. That's the trade-off versus a Packet
 Tunnel: simpler distribution, narrower scope.
 
-## Adding system-wide VPN (v2 roadmap)
+## How system-wide VPN works
 
-To route all device traffic through the tunnel you need:
+The `DNSpirePacketTunnel` extension hosts:
 
-1. A `NEPacketTunnelProvider` app extension with the `com.apple.developer.networking.networkextension`
-   entitlement (paid Developer account required; Apple reviews VPN apps closely).
-2. A `tun2socks` layer that consumes IP packets from `NEPacketTunnelFlow.readPackets`,
-   reconstructs TCP flows, hands them to the local SOCKS5, and writes responses
-   back as IP packets. `xjasonlyu/tun2socks/v2` is a good gVisor-based starting
-   point and can be embedded into the same `gomobile bind` package.
-3. Careful memory budgeting — Packet Tunnel extensions have a 50 MB hard limit.
+1. The MasterDnsVPN Go client (same one the in-app browser uses) — opens a
+   loopback SOCKS5 listener on `127.0.0.1:18000` inside the extension process.
+2. A gVisor `stack.Stack` with a `channel.Endpoint` that bridges to
+   `NEPacketTunnelFlow`. Swift reads packets from iOS, calls
+   `pt.writePacket(...)`; Go pushes outbound packets back via a
+   `PacketCallback` Swift implements (writes to `packetFlow.writePacketObjects`).
+3. A `tcp.Forwarder` on the gVisor stack: every inbound TCP SYN gets a
+   `CreateEndpoint` accept, then we `dialer.Dial("tcp", origDest)` through the
+   loopback SOCKS5. Two goroutines pipe bytes both ways.
+4. A UDP-53 interceptor at the link-endpoint level: DNS queries are unwrapped
+   from their UDP envelope, sent as DNS-over-TCP through SOCKS5 to a public
+   resolver (default 1.1.1.1:53), and the response is re-wrapped as a UDP IP
+   packet back to the originating address. All other UDP is silently dropped.
 
-None of this is wired up in v1.
+### Constraints
+
+- **Paid Apple Developer account required.** The
+  `com.apple.developer.networking.networkextension` entitlement is **not**
+  included in free provisioning profiles. The app will build and install
+  unsigned, but iOS will silently refuse to load the extension when you toggle
+  "System VPN" in the UI.
+- **50 MB extension memory limit.** gVisor's netstack is the heaviest tenant.
+  The current configuration uses 512 packet buffers in `channel.New` and the
+  default `tcp.Forwarder` (1024 max in-flight). Watch
+  `proc_info_extended.phys_footprint` if memory becomes a concern.
+- **TCP-only data plane.** Non-DNS UDP is dropped. Most modern apps (Safari,
+  Chrome, native iOS networking) fall back to TCP if UDP/QUIC stalls — voice,
+  some games, and pure-UDP protocols won't work.
+- **No IPv6.** The tunnel advertises IPv4-only network settings because the
+  upstream MasterDnsVPN channel is IPv4-only.
 
 ## License
 

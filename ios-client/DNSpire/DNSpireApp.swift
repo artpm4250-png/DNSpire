@@ -5,6 +5,7 @@ struct DNSpireApp: App {
     @StateObject private var configStore = ConfigStore()
     @StateObject private var tunnel = TunnelController()
     @StateObject private var logStore = LogStore()
+    @StateObject private var vpn = VPNManager()
 
     var body: some Scene {
         WindowGroup {
@@ -12,6 +13,7 @@ struct DNSpireApp: App {
                 .environmentObject(configStore)
                 .environmentObject(tunnel)
                 .environmentObject(logStore)
+                .environmentObject(vpn)
                 .task {
                     tunnel.attach(logStore: logStore)
                 }

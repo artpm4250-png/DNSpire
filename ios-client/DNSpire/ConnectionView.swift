@@ -1,25 +1,50 @@
 import SwiftUI
 
+enum TunnelMode: String, CaseIterable, Identifiable {
+    case browser, systemVPN
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .browser:   return "In-app browser"
+        case .systemVPN: return "System-wide VPN"
+        }
+    }
+}
+
 struct ConnectionView: View {
     @EnvironmentObject var configStore: ConfigStore
     @EnvironmentObject var tunnel: TunnelController
     @EnvironmentObject var logStore: LogStore
+    @EnvironmentObject var vpn: VPNManager
+
+    @AppStorage("DNSpire.tunnelMode") private var modeRaw: String = TunnelMode.browser.rawValue
+
+    private var mode: TunnelMode {
+        get { TunnelMode(rawValue: modeRaw) ?? .browser }
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    StatusBadge(status: tunnel.status, detail: tunnel.statusDetail)
-                        .padding(.top, 24)
+                    modePicker
+
+                    if mode == .browser {
+                        StatusBadge(status: tunnel.status, detail: tunnel.statusDetail)
+                            .padding(.top, 8)
+                    } else {
+                        VPNBadge(status: vpn.status)
+                            .padding(.top, 8)
+                    }
 
                     actionButton
 
-                    if !tunnel.socksAddress.isEmpty {
+                    if mode == .browser, !tunnel.socksAddress.isEmpty {
                         InfoCard(title: "Local SOCKS5", value: tunnel.socksAddress,
                                  systemImage: "network")
                     }
 
-                    if let err = tunnel.lastError {
+                    if let err = currentError {
                         ErrorCard(message: err)
                     }
 
@@ -40,8 +65,30 @@ struct ConnectionView: View {
         configStore.draft.resolvers.contains(where: { $0.enabled })
     }
 
+    private var currentError: String? {
+        mode == .browser ? tunnel.lastError : vpn.lastError
+    }
+
+    private var modePicker: some View {
+        Picker("Mode", selection: $modeRaw) {
+            ForEach(TunnelMode.allCases) { m in
+                Text(m.label).tag(m.rawValue)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.top, 16)
+    }
+
     @ViewBuilder
     private var actionButton: some View {
+        switch mode {
+        case .browser:   browserActionButton
+        case .systemVPN: systemActionButton
+        }
+    }
+
+    @ViewBuilder
+    private var browserActionButton: some View {
         let isRunning = tunnel.status != .stopped && tunnel.status != .error
         Button {
             if isRunning {
@@ -63,6 +110,33 @@ struct ConnectionView: View {
         .buttonStyle(.borderedProminent)
         .tint(isRunning ? .red : .accentColor)
         .disabled(!isRunning && !canConnect)
+    }
+
+    @ViewBuilder
+    private var systemActionButton: some View {
+        let active = vpn.status == .connected ||
+                     vpn.status == .connecting ||
+                     vpn.status == .reasserting
+        Button {
+            if active {
+                vpn.disconnect()
+            } else {
+                guard let json = configStore.encodedConfigJSON() else {
+                    logStore.append("[ui] cannot start: required fields missing")
+                    return
+                }
+                let resolvers = configStore.encodedResolversText()
+                Task { await vpn.connect(configJSON: json, resolversText: resolvers) }
+            }
+        } label: {
+            Text(active ? "Disconnect" : "Enable System VPN")
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(active ? .red : .accentColor)
+        .disabled(!active && !canConnect)
     }
 
     private var summarySection: some View {
@@ -163,6 +237,54 @@ private struct StatusBadge: View {
         case .connected: return "checkmark"
         case .error: return "exclamationmark.triangle.fill"
         default: return "arrow.triangle.2.circlepath"
+        }
+    }
+}
+
+private struct VPNBadge: View {
+    let status: VPNStatus
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Circle()
+                .fill(color)
+                .frame(width: 64, height: 64)
+                .overlay(
+                    Image(systemName: icon)
+                        .font(.title)
+                        .foregroundStyle(.white)
+                )
+            Text(label).font(.headline)
+            Text("System-wide VPN").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var label: String {
+        switch status {
+        case .connected:     return "Connected"
+        case .connecting:    return "Connecting…"
+        case .reasserting:   return "Reasserting…"
+        case .disconnecting: return "Disconnecting…"
+        case .disconnected:  return "Disconnected"
+        case .disabled:      return "Profile not installed"
+        case .unknown:       return "Unknown"
+        }
+    }
+
+    private var color: Color {
+        switch status {
+        case .connected:                  return .green
+        case .connecting, .reasserting:   return .orange
+        case .disconnecting:              return .orange
+        default:                          return .gray
+        }
+    }
+
+    private var icon: String {
+        switch status {
+        case .connected:                                                 return "checkmark"
+        case .connecting, .reasserting, .disconnecting:                  return "arrow.triangle.2.circlepath"
+        default:                                                         return "bolt.slash.fill"
         }
     }
 }

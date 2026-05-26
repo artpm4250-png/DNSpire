@@ -52,7 +52,33 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.dnspire.ios
+        CODE_SIGN_ENTITLEMENTS: DNSpire/DNSpire.entitlements
     dependencies:
       - framework: Frameworks/DNSpireCore.xcframework
         embed: true
+        codeSign: true
+      - target: DNSpirePacketTunnel
+
+  DNSpirePacketTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: DNSpirePacketTunnel
+    info:
+      path: DNSpirePacketTunnel/Info.plist
+      properties:
+        CFBundleDisplayName: DNSpire Packet Tunnel
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dnspire.ios.tunnel
+        PRODUCT_MODULE_NAME: DNSpirePacketTunnel
+        CODE_SIGN_ENTITLEMENTS: DNSpirePacketTunnel/DNSpirePacketTunnel.entitlements
+    dependencies:
+      - framework: Frameworks/DNSpireCore.xcframework
+        embed: false
         codeSign: true

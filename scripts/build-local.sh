@@ -33,6 +33,17 @@ echo "==> Staging mobile-overlay into upstream/mobile"
 mkdir -p upstream/mobile
 cp -R mobile-overlay/. upstream/mobile/
 
+echo "==> Fetching extra deps for PacketTunnel (gVisor + golang.org/x/net)"
+# These are not in upstream's go.mod, so we add them transparently. Edits to
+# upstream/go.mod and upstream/go.sum are intentionally local and not committed.
+(cd upstream && \
+  go get \
+    gvisor.dev/gvisor@go \
+    golang.org/x/net \
+    golang.org/x/exp \
+    golang.org/x/time \
+    github.com/google/btree)
+
 echo "==> Running gomobile init (one-time)"
 (cd upstream && gomobile init >/dev/null 2>&1 || true)
 

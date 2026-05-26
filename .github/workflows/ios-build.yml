@@ -52,6 +52,20 @@ jobs:
           go install golang.org/x/mobile/cmd/gobind@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      - name: Fetch extra deps for PacketTunnel
+        working-directory: upstream
+        run: |
+          set -eux
+          # gVisor + golang.org/x/net are needed by mobile-overlay/packet_tunnel.go.
+          # Adding them here instead of committing them to upstream's go.mod
+          # (upstream is a submodule we don't fork).
+          go get \
+            gvisor.dev/gvisor@go \
+            golang.org/x/net \
+            golang.org/x/exp \
+            golang.org/x/time \
+            github.com/google/btree
+
       - name: Init gomobile
         working-directory: upstream
         run: |
