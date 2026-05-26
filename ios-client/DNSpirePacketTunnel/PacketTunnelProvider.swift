@@ -134,22 +134,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 }
 
-// DNSpireMobileLogCallback / DNSpireMobileStatusCallback / DNSpireMobilePacketCallback are
-// gomobile-generated protocols. Adapter classes bridge them to Swift closures.
+// DNSpireMobileLogCallbackProtocol / DNSpireMobileStatusCallbackProtocol /
+// DNSpireMobilePacketCallbackProtocol are gomobile-generated protocols.
+// Adapter classes bridge them to Swift closures.
 
-private final class LogSink: NSObject, DNSpireMobileLogCallback {
+private final class LogSink: NSObject, DNSpireMobileLogCallbackProtocol {
     let handler: (String?) -> Void
     init(handler: @escaping (String?) -> Void) { self.handler = handler }
     func onLog(_ line: String?) { handler(line) }
 }
 
-private final class StatusSink: NSObject, DNSpireMobileStatusCallback {
+private final class StatusSink: NSObject, DNSpireMobileStatusCallbackProtocol {
     let handler: (String?) -> Void
     init(handler: @escaping (String?) -> Void) { self.handler = handler }
     func onStatus(_ state: String?) { handler(state) }
 }
 
-private final class PacketSink: NSObject, DNSpireMobilePacketCallback {
+private final class PacketSink: NSObject, DNSpireMobilePacketCallbackProtocol {
     let handler: (Data?) -> Void
     init(handler: @escaping (Data?) -> Void) { self.handler = handler }
     func onPacket(_ data: Data?) { handler(data) }

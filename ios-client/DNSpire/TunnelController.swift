@@ -96,10 +96,10 @@ final class TunnelController: ObservableObject {
     }
 }
 
-// DNSpireMobileLogCallback and DNSpireMobileStatusCallback are gomobile-generated
-// protocols. We bridge them to Swift closures.
+// DNSpireMobileLogCallbackProtocol and DNSpireMobileStatusCallbackProtocol are
+// gomobile-generated protocols. We bridge them to Swift closures.
 
-private final class LogSink: NSObject, DNSpireMobileLogCallback {
+private final class LogSink: NSObject, DNSpireMobileLogCallbackProtocol {
     let handler: (String) -> Void
     init(handler: @escaping (String) -> Void) { self.handler = handler }
     func onLog(_ line: String?) {
@@ -107,7 +107,7 @@ private final class LogSink: NSObject, DNSpireMobileLogCallback {
     }
 }
 
-private final class StatusSink: NSObject, DNSpireMobileStatusCallback {
+private final class StatusSink: NSObject, DNSpireMobileStatusCallbackProtocol {
     let handler: (String) -> Void
     init(handler: @escaping (String) -> Void) { self.handler = handler }
     func onStatus(_ state: String?) {
