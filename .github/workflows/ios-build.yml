@@ -1,0 +1,146 @@
+name: Build iOS client
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    env:
+      # Pin a recent Xcode that ships with iOS 17 SDK.
+      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
+      MOBILE_FRAMEWORK_NAME: DNSpireCore
+      MOBILE_GO_PKG: ./mobile
+      MOBILE_PREFIX: DNSpire
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun simctl list runtimes | head -20
+
+      - name: Stage mobile-overlay into upstream
+        run: |
+          set -eux
+          mkdir -p upstream/mobile
+          cp -R mobile-overlay/. upstream/mobile/
+          ls -la upstream/mobile
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+          cache-dependency-path: upstream/go.sum
+
+      - name: Install gomobile
+        run: |
+          set -eux
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Init gomobile
+        working-directory: upstream
+        run: |
+          set -eux
+          go mod download
+          gomobile init
+
+      - name: Build xcframework
+        working-directory: upstream
+        run: |
+          set -eux
+          mkdir -p ../ios-client/Frameworks
+          gomobile bind \
+            -target=ios,iossimulator \
+            -prefix "${MOBILE_PREFIX}" \
+            -o "../ios-client/Frameworks/${MOBILE_FRAMEWORK_NAME}.xcframework" \
+            -trimpath \
+            -ldflags="-s -w" \
+            "${MOBILE_GO_PKG}"
+          ls -la "../ios-client/Frameworks/${MOBILE_FRAMEWORK_NAME}.xcframework"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios-client
+        run: |
+          set -eux
+          xcodegen generate
+          ls -la DNSpire.xcodeproj
+
+      - name: Build (iOS Simulator, unsigned)
+        working-directory: ios-client
+        run: |
+          set -eux
+          xcodebuild \
+            -project DNSpire.xcodeproj \
+            -scheme DNSpire \
+            -configuration Release \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package simulator .app
+        working-directory: ios-client
+        run: |
+          set -eux
+          APP_PATH="$(find build/Build/Products -name '*.app' -type d | head -1)"
+          test -n "$APP_PATH"
+          echo "Found app at: $APP_PATH"
+          mkdir -p artifacts
+          cp -R "$APP_PATH" artifacts/
+          # Zip it so Actions preserves the bundle layout.
+          (cd artifacts && zip -r DNSpire-simulator.zip "$(basename "$APP_PATH")")
+          ls -la artifacts
+
+      - name: Build (iOS device, unsigned .ipa for sideloading)
+        working-directory: ios-client
+        run: |
+          set -eux
+          # Build for real device without signing. The resulting .app must
+          # later be signed (e.g. via Sideloadly / AltStore) before being
+          # installed on a real iPhone — Apple still requires a signature, but
+          # the user can supply their own free Apple ID cert at install time.
+          xcodebuild \
+            -project DNSpire.xcodeproj \
+            -scheme DNSpire \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build-device \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build || echo "Device build is optional; continuing."
+
+          APP_PATH="$(find build-device/Build/Products -name '*.app' -type d | head -1 || true)"
+          if [ -n "$APP_PATH" ]; then
+            mkdir -p artifacts/Payload
+            cp -R "$APP_PATH" artifacts/Payload/
+            (cd artifacts && zip -r DNSpire-unsigned.ipa Payload && rm -rf Payload)
+            ls -la artifacts
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DNSpire-ios
+          path: ios-client/artifacts/*
+          if-no-files-found: error
+          retention-days: 14

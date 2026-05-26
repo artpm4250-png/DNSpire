@@ -1,0 +1,27 @@
+# Build outputs
+ios-client/build/
+ios-client/build-device/
+ios-client/artifacts/
+ios-client/Frameworks/*.xcframework
+ios-client/DNSpire.xcodeproj
+
+# Staged into the submodule at build time — not source-of-truth.
+upstream/mobile/
+
+# Xcode user state
+*.xcuserstate
+xcuserdata/
+DerivedData/
+
+# Go binaries
+/upstream/masterdnsvpn-client
+/upstream/masterdnsvpn-server
+*.exe
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp

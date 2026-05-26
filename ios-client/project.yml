@@ -1,0 +1,58 @@
+name: DNSpire
+options:
+  bundleIdPrefix: com.dnspire
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    ENABLE_BITCODE: NO
+    # Allow unsigned local builds for sideloading. CI can override to "iPhone Developer".
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGNING_ALLOWED: NO
+    SUPPORTS_MACCATALYST: NO
+    # Make the embedded xcframework discoverable.
+    FRAMEWORK_SEARCH_PATHS:
+      - "$(inherited)"
+      - "$(SRCROOT)/Frameworks"
+
+targets:
+  DNSpire:
+    type: application
+    platform: iOS
+    sources:
+      - path: DNSpire
+    info:
+      path: DNSpire/Info.plist
+      properties:
+        CFBundleDisplayName: DNSpire
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIRequiresFullScreen: false
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        # Permit WKWebView traffic to flow through the local SOCKS5 endpoint.
+        # End sites are still subject to their own TLS requirements.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dnspire.ios
+    dependencies:
+      - framework: Frameworks/DNSpireCore.xcframework
+        embed: true
+        codeSign: true
