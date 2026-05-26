@@ -10,7 +10,7 @@ import os.log
 final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private let log = OSLog(subsystem: "com.dnspire.ios.tunnel", category: "provider")
-    private var packetTunnel: DNSpirePacketTunnel?
+    private var packetTunnel: DNSpireMobilePacketTunnel?
     private var running = false
 
     override func startTunnel(options: [String: NSObject]?,
@@ -29,7 +29,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let resolversText = (providerConfig["resolversText"] as? String) ?? ""
         let dnsResolver = (providerConfig["dnsResolver"] as? String) ?? "1.1.1.1:53"
 
-        let pt = DNSpireNewPacketTunnel()!
+        let pt = DNSpireMobileNewPacketTunnel()!
         pt.setLogCallback(LogSink { [weak self] line in
             guard let self else { return }
             os_log("%{public}@", log: self.log, type: .info, line ?? "")
@@ -134,22 +134,22 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 }
 
-// DNSpireLogCallback / DNSpireStatusCallback / DNSpirePacketCallback are
+// DNSpireMobileLogCallback / DNSpireMobileStatusCallback / DNSpireMobilePacketCallback are
 // gomobile-generated protocols. Adapter classes bridge them to Swift closures.
 
-private final class LogSink: NSObject, DNSpireLogCallbackProtocol {
+private final class LogSink: NSObject, DNSpireMobileLogCallback {
     let handler: (String?) -> Void
     init(handler: @escaping (String?) -> Void) { self.handler = handler }
     func onLog(_ line: String?) { handler(line) }
 }
 
-private final class StatusSink: NSObject, DNSpireStatusCallbackProtocol {
+private final class StatusSink: NSObject, DNSpireMobileStatusCallback {
     let handler: (String?) -> Void
     init(handler: @escaping (String?) -> Void) { self.handler = handler }
     func onStatus(_ state: String?) { handler(state) }
 }
 
-private final class PacketSink: NSObject, DNSpirePacketCallbackProtocol {
+private final class PacketSink: NSObject, DNSpireMobilePacketCallback {
     let handler: (Data?) -> Void
     init(handler: @escaping (Data?) -> Void) { self.handler = handler }
     func onPacket(_ data: Data?) { handler(data) }
