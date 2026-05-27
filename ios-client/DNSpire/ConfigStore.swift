@@ -1,6 +1,72 @@
 import Foundation
 import Combine
 
+/// Identity slice: who you connect to. Captured into reusable named snapshots
+/// by [[ProfileStore]]; selected via the Server row in [[ProfileSelectorCard]].
+struct ServerProfile: Codable, Identifiable, Equatable {
+    var id: UUID = UUID()
+    var name: String
+    var domains: [String]
+    var encryptionKey: String
+    /// 0=None, 1=XOR, 2=ChaCha20, 3=AES-128-GCM, 4=AES-192-GCM, 5=AES-256-GCM.
+    var dataEncryptionMethod: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, domains, encryptionKey, dataEncryptionMethod
+    }
+}
+
+/// DNS resolver list slice. Held separately from [[ServerProfile]] so the user
+/// can swap upstream resolvers without re-entering server identity.
+struct ResolverProfile: Codable, Identifiable, Equatable {
+    var id: UUID = UUID()
+    var name: String
+    var resolvers: [ResolverEntry]
+
+    enum CodingKeys: String, CodingKey { case id, name, resolvers }
+}
+
+/// Everything else from [[ClientConfigDraft]] that isn't identity or resolvers:
+/// transport, listener, compression, MTU probing, ARQ, worker counts. Lets the
+/// user keep a "fast LTE" preset and a "stable Wi-Fi" preset against the same
+/// server.
+struct TuningPreset: Codable, Identifiable, Equatable {
+    var id: UUID = UUID()
+    var name: String
+    var protocolType: String
+    var listenIP: String
+    var listenPort: Int
+    var socks5AuthEnabled: Bool
+    var socks5User: String
+    var socks5Pass: String
+    var resolverBalancingStrategy: Int
+    var logLevel: String
+    var uploadCompressionType: Int
+    var downloadCompressionType: Int
+    var compressionMinSize: Int
+    var mtuTestRetries: Int
+    var mtuTestTimeout: Double
+    var mtuTestParallelism: Int
+    var packetDuplicationCount: Int
+    var setupPacketDuplicationCount: Int
+    var rxTxWorkers: Int
+    var maxPacketsPerBatch: Int
+    var arqWindowSize: Int
+    var systemVPNDNSResolver: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case protocolType, listenIP, listenPort
+        case socks5AuthEnabled, socks5User, socks5Pass
+        case resolverBalancingStrategy, logLevel
+        case uploadCompressionType, downloadCompressionType, compressionMinSize
+        case mtuTestRetries, mtuTestTimeout, mtuTestParallelism
+        case packetDuplicationCount, setupPacketDuplicationCount
+        case rxTxWorkers, maxPacketsPerBatch, arqWindowSize
+        case systemVPNDNSResolver
+    }
+}
+
 struct ClientConfigDraft: Codable, Equatable {
     var domains: [String]
     var encryptionKey: String

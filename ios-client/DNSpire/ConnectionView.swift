@@ -29,6 +29,7 @@ enum TunnelMode: String, CaseIterable, Identifiable {
 
 struct ConnectionView: View {
     @EnvironmentObject var configStore: ConfigStore
+    @EnvironmentObject var profileStore: ProfileStore
     @EnvironmentObject var tunnel: TunnelController
     @EnvironmentObject var logStore: LogStore
     @EnvironmentObject var vpn: VPNManager
@@ -57,6 +58,10 @@ struct ConnectionView: View {
                             .padding(.top, 8)
                     }
 
+                    if !isCurrentlyRunning {
+                        SaveToProfileButton()
+                    }
+
                     actionButton
 
                     if !canConnect, !isCurrentlyRunning {
@@ -75,7 +80,7 @@ struct ConnectionView: View {
                         ErrorCard(message: err)
                     }
 
-                    summarySection
+                    ProfileSelectorCard()
 
                     Spacer(minLength: 24)
                 }
@@ -213,52 +218,6 @@ struct ConnectionView: View {
         .disabled(!active && !canConnect)
     }
 
-    private var summarySection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionLabel("Configuration")
-            row("Domains", configStore.draft.domains.joined(separator: ", "))
-            row("Encryption", encryptionLabel(configStore.draft.dataEncryptionMethod))
-            row("Mode", configStore.draft.protocolType)
-            row("Resolvers", "\(enabledResolverCount)")
-        }
-        .padding()
-        .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .textCase(.uppercase)
-    }
-
-    private func row(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).multilineTextAlignment(.trailing)
-        }
-        .font(.subheadline)
-    }
-
-    private var enabledResolverCount: Int {
-        configStore.draft.resolvers.filter {
-            $0.enabled && ResolverEntry.isValid(host: $0.ip, port: $0.port)
-        }.count
-    }
-
-    private func encryptionLabel(_ method: Int) -> String {
-        switch method {
-        case 0: return "None"
-        case 1: return "XOR"
-        case 2: return "ChaCha20"
-        case 3: return "AES-128-GCM"
-        case 4: return "AES-192-GCM"
-        case 5: return "AES-256-GCM"
-        default: return "Unknown (\(method))"
-        }
-    }
 }
 
 private struct StatusBadge: View {

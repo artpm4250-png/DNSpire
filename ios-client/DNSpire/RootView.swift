@@ -16,6 +16,7 @@ struct RootView: View {
 #Preview {
     RootView()
         .environmentObject(ConfigStore.preview)
+        .environmentObject(ProfileStore.preview)
         .environmentObject(TunnelController())
         .environmentObject(LogStore())
         .environmentObject(VPNManager())
