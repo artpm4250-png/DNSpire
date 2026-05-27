@@ -332,21 +332,26 @@ final class ConfigStore: ObservableObject {
         return v.isEmpty ? "1.1.1.1:53" : v
     }
 
+    // Validators are `nonisolated` because they touch no instance state and
+    // need to be callable from non-MainActor View structs (e.g. ValidatedRow's
+    // computed `isValid`). Without this, Swift 5.9 errors with "call to main
+    // actor-isolated static method in a synchronous nonisolated context".
+
     /// Whether a host string parses as an IPv4/IPv6 literal or DNS label set the
     /// upstream client will accept.
-    static func validateHost(_ raw: String) -> Bool {
+    nonisolated static func validateHost(_ raw: String) -> Bool {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         return ResolverEntry.isValid(host: trimmed, port: 1)
     }
 
-    static func validatePort(_ port: Int) -> Bool {
+    nonisolated static func validatePort(_ port: Int) -> Bool {
         (1...65535).contains(port)
     }
 
     /// Validate a `host:port` (or `[v6]:port`) target — same shape the system
     /// VPN extension expects for its DNS-over-TCP resolver.
-    static func validateHostPort(_ raw: String) -> Bool {
+    nonisolated static func validateHostPort(_ raw: String) -> Bool {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if trimmed.hasPrefix("[") {
