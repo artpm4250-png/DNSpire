@@ -763,29 +763,29 @@ private struct MissingFieldsCard: View {
     let items: [String]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: "slider.horizontal.3")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.circle.fill")
                     .foregroundStyle(.orange)
                 Text("Configuration needed")
-                    .font(.headline)
+                    .font(.subheadline.weight(.semibold))
                 Spacer()
             }
             Text("Open Settings to fill in the following before connecting:")
-                .font(.subheadline)
+                .font(.caption)
                 .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 ForEach(items, id: \.self) { item in
                     HStack(spacing: 8) {
                         Image(systemName: "circle.fill")
-                            .font(.system(size: 5))
+                            .font(.system(size: 4))
                             .foregroundStyle(.orange)
-                        Text(item).font(.subheadline)
+                        Text(item).font(.caption)
                     }
                 }
             }
         }
-        .padding()
+        .padding(14)
         .background(Color.orange.opacity(0.10))
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }

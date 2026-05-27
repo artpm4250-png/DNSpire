@@ -282,11 +282,17 @@ struct ProfileSliceSheet: View {
             guard !isActive else { return }
             pendingSwitch = PendingSwitch(id: id, name: name)
         } label: {
-            HStack {
+            HStack(spacing: 12) {
                 Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
                     .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+                    .font(.body)
+                Image(systemName: slice.icon)
+                    .font(.caption)
+                    .foregroundStyle(.tint.opacity(0.7))
+                    .frame(width: 18)
                 Text(name)
                     .foregroundStyle(.primary)
+                    .fontWeight(isActive ? .semibold : .regular)
                 Spacer()
                 if slice == .server, let outcome = testRunner.outcomes[id] {
                     outcomeBadge(outcome)
@@ -408,45 +414,83 @@ struct SaveToProfileButton: View {
     var body: some View {
         let div = profileStore.divergence(from: configStore.draft)
         if div.any {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
-                    Image(systemName: "square.and.arrow.down.on.square")
-                        .foregroundStyle(.orange)
-                    Text("Working values changed")
+                    Circle()
+                        .fill(Color.orange)
+                        .frame(width: 6, height: 6)
+                    Text("Unsaved changes")
                         .font(.subheadline.weight(.semibold))
                     Spacer()
-                }
-                if div.server {
-                    Toggle("Server → \(profileStore.activeServer.name)", isOn: $saveServer)
-                        .font(.caption)
-                }
-                if div.resolver {
-                    Toggle("Resolvers → \(profileStore.activeResolver.name)", isOn: $saveResolver)
-                        .font(.caption)
-                }
-                if div.tuning {
-                    Toggle("Tuning → \(profileStore.activeTuning.name)", isOn: $saveTuning)
-                        .font(.caption)
-                }
-                Button {
-                    save(div: div)
-                } label: {
-                    Text("Save to profile")
+                    Button("Save") { save(div: div) }
                         .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(!hasAnySelection(div: div))
                 }
-                .buttonStyle(.bordered)
-                .tint(.orange)
-                .disabled(!hasAnySelection(div: div))
+                VStack(alignment: .leading, spacing: 4) {
+                    if div.server {
+                        sliceToggle(
+                            icon: ProfileSliceKind.server.icon,
+                            label: "Server",
+                            target: profileStore.activeServer.name,
+                            isOn: $saveServer
+                        )
+                    }
+                    if div.resolver {
+                        sliceToggle(
+                            icon: ProfileSliceKind.resolver.icon,
+                            label: "Resolvers",
+                            target: profileStore.activeResolver.name,
+                            isOn: $saveResolver
+                        )
+                    }
+                    if div.tuning {
+                        sliceToggle(
+                            icon: ProfileSliceKind.tuning.icon,
+                            label: "Tuning",
+                            target: profileStore.activeTuning.name,
+                            isOn: $saveTuning
+                        )
+                    }
+                }
             }
-            .padding()
-            .background(Color.orange.opacity(0.10))
+            .padding(14)
+            .background(Color(.secondarySystemBackground))
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .onChange(of: div.server) { _, new in if !new { saveServer = true } }
             .onChange(of: div.resolver) { _, new in if !new { saveResolver = true } }
             .onChange(of: div.tuning) { _, new in if !new { saveTuning = true } }
         }
+    }
+
+    private func sliceToggle(icon: String, label: String, target: String, isOn: Binding<Bool>) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: isOn.wrappedValue ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(isOn.wrappedValue ? Color.accentColor : Color.secondary)
+                    .font(.body)
+                Image(systemName: icon)
+                    .font(.caption)
+                    .foregroundStyle(.tint)
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Image(systemName: "arrow.right")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Text(target)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func hasAnySelection(div: ProfileStore.Divergence) -> Bool {
