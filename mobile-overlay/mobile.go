@@ -10,14 +10,17 @@
 package mobile
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"masterdnsvpn-go/internal/client"
 	"masterdnsvpn-go/internal/config"
@@ -52,6 +55,17 @@ type Tunnel struct {
 	lastStatus      string
 	scratchDir      string
 	resolverTmpFile string
+	// Captured in Start when we redirect os.Stdout / os.Stderr through pipes
+	// so the upstream `logger.Logger` (which writes to os.Stdout, frozen at
+	// constructor time) ends up streaming into the host's LogCallback.
+	// Restored and closed in Stop so the next Start can re-hook fresh pipes
+	// and the GC can reclaim everything.
+	stdoutPipeR *os.File
+	stdoutPipeW *os.File
+	stderrPipeR *os.File
+	stderrPipeW *os.File
+	prevStdout  *os.File
+	prevStderr  *os.File
 }
 
 // NewTunnel allocates a tunnel handle. It does not start any goroutines.
@@ -133,8 +147,22 @@ func (t *Tunnel) Start(configJSON string, resolversText string, scratchDir strin
 		return err
 	}
 
+	// Hijack os.Stdout / os.Stderr BEFORE BootstrapLoadedConfig so the upstream
+	// logger.Logger (constructed inside Bootstrap) freezes our pipe's write end
+	// as its console writer. iOS swallows stdout/stderr for sandboxed apps, so
+	// without this the only logs reaching the UI would be the [ui]/[vpn]/
+	// [mobile] lines we synthesize on our side — the actual client narration
+	// (MTU probes, session init, resolver rotation, errors) would be invisible.
+	// On failure to set up pipes we degrade gracefully: bootstrap still
+	// proceeds, just without client-side logs in the UI.
+	currentCB := t.logCB
+	if currentCB != nil {
+		t.installStdioCapture(currentCB)
+	}
+
 	app, err := client.BootstrapLoadedConfig(cfg, "")
 	if err != nil {
+		t.restoreStdioCapture()
 		t.emitStatusLocked("error:" + err.Error())
 		t.mu.Unlock()
 		return fmt.Errorf("bootstrap: %w", err)
@@ -157,10 +185,11 @@ func (t *Tunnel) Start(configJSON string, resolversText string, scratchDir strin
 		go logCB.OnLog(fmt.Sprintf("[mobile] tunnel bootstrapped; SOCKS5 will listen on %s", socksAddr))
 	}
 
+	t.emitStatus("mtu_testing")
+
 	go func() {
 		defer close(t.done)
 		defer t.running.Store(false)
-		t.emitStatus("mtu_testing")
 		if err := app.Run(ctx); err != nil {
 			t.emitStatus("error:" + err.Error())
 			return
@@ -168,7 +197,86 @@ func (t *Tunnel) Start(configJSON string, resolversText string, scratchDir strin
 		t.emitStatus("stopped")
 	}()
 
+	go t.watchRuntimeStatus(ctx, app, socksAddr)
+
 	return nil
+}
+
+// watchRuntimeStatus polls the upstream client until ctx is cancelled, emitting
+// status transitions the UI relies on. Without it, mobile.go would only ever
+// report "mtu_testing" and "stopped" — the upstream Run loop never calls back.
+//
+// State derivation (from outside the package, with only SessionReady exported):
+//   - SessionReady=false                     → mtu_testing (MTU probing or
+//                                              session-init failures retry)
+//   - SessionReady=true, listener refusing   → session_init (narrow window
+//                                              between session ready and
+//                                              StartAsyncRuntime opening port)
+//   - SessionReady=true, listener accepting  → connected
+//
+// Once connected, we keep watching: if SessionReady drops back to false we
+// report "reconnecting" so the UI reflects mid-session resets.
+func (t *Tunnel) watchRuntimeStatus(ctx context.Context, app *client.Client, socksAddr string) {
+	probeAddr := normalizeProbeAddress(socksAddr)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	last := "mtu_testing"
+	reachedConnected := false
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			next := last
+			ready := app.SessionReady()
+			switch {
+			case !ready && reachedConnected:
+				next = "reconnecting"
+			case !ready:
+				next = "mtu_testing"
+			case ready && !probeListener(probeAddr):
+				next = "session_init"
+			default:
+				next = "connected"
+				reachedConnected = true
+			}
+			if next != last {
+				t.emitStatus(next)
+				last = next
+			}
+		}
+	}
+}
+
+// normalizeProbeAddress maps a wildcard listen address ("0.0.0.0", "::",
+// or empty host) to a loopback target the in-process prober can actually
+// dial. Anything else is returned as-is.
+func normalizeProbeAddress(socksAddr string) string {
+	host, port, err := net.SplitHostPort(socksAddr)
+	if err != nil {
+		return socksAddr
+	}
+	switch host {
+	case "", "0.0.0.0":
+		host = "127.0.0.1"
+	case "::":
+		host = "::1"
+	}
+	return net.JoinHostPort(host, port)
+}
+
+// probeListener returns true if a TCP connection succeeds within a short
+// budget. We don't speak SOCKS5 here — accept is enough to know the upstream
+// runtime has reached StartAsyncRuntime and bound the listener.
+func probeListener(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 // Stop cancels the tunnel and waits for the runtime goroutine to exit.
@@ -196,6 +304,7 @@ func (t *Tunnel) Stop() error {
 	t.done = nil
 	t.app = nil
 	t.socksAddr = ""
+	t.restoreStdioCapture()
 	t.mu.Unlock()
 	t.emitStatus("stopped")
 	return nil
@@ -212,6 +321,136 @@ func (t *Tunnel) emitStatusLocked(state string) {
 	if t.statusCB != nil {
 		go t.statusCB.OnStatus(state)
 	}
+}
+
+// installStdioCapture redirects os.Stdout and os.Stderr through pipes that a
+// pair of goroutines drain line-by-line, forwarding each line to cb tagged as
+// `[client]`. Must be called with t.mu held. Idempotent in the sense that a
+// subsequent call without an intervening restore replaces the previous pipes
+// (the old ones are closed, their drain goroutines exit on EOF).
+func (t *Tunnel) installStdioCapture(cb LogCallback) {
+	// Tear down any leftover pipes from a previous Start that didn't go
+	// through Stop (shouldn't happen, but be defensive).
+	t.restoreStdioCapture()
+
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		return
+	}
+	errR, errW, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		_ = outR.Close()
+		_ = outW.Close()
+		return
+	}
+
+	t.prevStdout = os.Stdout
+	t.prevStderr = os.Stderr
+	t.stdoutPipeR = outR
+	t.stdoutPipeW = outW
+	t.stderrPipeR = errR
+	t.stderrPipeW = errW
+
+	os.Stdout = outW
+	os.Stderr = errW
+
+	go drainPipe(outR, cb)
+	go drainPipe(errR, cb)
+}
+
+// restoreStdioCapture reverses installStdioCapture. Safe to call when no
+// capture is active (no-op). Must be called with t.mu held.
+func (t *Tunnel) restoreStdioCapture() {
+	if t.prevStdout != nil {
+		os.Stdout = t.prevStdout
+		t.prevStdout = nil
+	}
+	if t.prevStderr != nil {
+		os.Stderr = t.prevStderr
+		t.prevStderr = nil
+	}
+	// Closing the write ends causes the drain goroutines reading the
+	// corresponding read ends to see EOF and exit. The read ends are also
+	// closed (defensive — drain goroutines also close on exit) so file
+	// descriptors are released promptly.
+	if t.stdoutPipeW != nil {
+		_ = t.stdoutPipeW.Close()
+		t.stdoutPipeW = nil
+	}
+	if t.stderrPipeW != nil {
+		_ = t.stderrPipeW.Close()
+		t.stderrPipeW = nil
+	}
+	t.stdoutPipeR = nil
+	t.stderrPipeR = nil
+}
+
+// drainPipe reads lines from r until EOF, forwarding each as a `[client]`
+// log event. ANSI escape sequences from the upstream logger's colored output
+// are stripped — the iOS UI renders colours from its own level detection
+// pass, and raw escape codes would look like noise.
+func drainPipe(r *os.File, cb LogCallback) {
+	defer r.Close()
+	scanner := bufio.NewScanner(r)
+	// Allow long lines: the upstream MTU table dumps can run beyond the
+	// default 64KiB scanner limit when many resolvers are listed.
+	const maxLine = 1 << 20
+	scanner.Buffer(make([]byte, 0, 4096), maxLine)
+	for scanner.Scan() {
+		line := stripANSI(scanner.Text())
+		if line == "" {
+			continue
+		}
+		// gomobile callbacks block the calling goroutine until Swift returns.
+		// Dispatch each line on its own goroutine so a slow Swift handler
+		// can't back-pressure the upstream logger (which holds an internal
+		// mutex while writing).
+		go cb.OnLog("[client] " + line)
+	}
+}
+
+// stripANSI removes CSI / SGR escape sequences (the `\x1b[…m` style colour
+// codes the upstream logger emits) so they don't show up as `^[[31m...` in
+// the UI.
+func stripANSI(s string) string {
+	if !containsByte(s, 0x1b) {
+		return s
+	}
+	out := make([]byte, 0, len(s))
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		if c != 0x1b {
+			out = append(out, c)
+			i++
+			continue
+		}
+		// ESC [ ... letter — skip until the terminator (a letter A-Za-z).
+		if i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) {
+				b := s[j]
+				j++
+				if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') {
+					break
+				}
+			}
+			i = j
+			continue
+		}
+		// Stray ESC with no '[' — drop just the ESC and continue.
+		i++
+	}
+	return string(out)
+}
+
+func containsByte(s string, b byte) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return true
+		}
+	}
+	return false
 }
 
 func loadConfigFromJSON(configJSON string, resolversFilePath string) (config.ClientConfig, error) {

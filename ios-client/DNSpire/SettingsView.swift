@@ -1,7 +1,11 @@
 import SwiftUI
+import UIKit
 
 struct SettingsView: View {
     @EnvironmentObject var configStore: ConfigStore
+    @EnvironmentObject var vpn: VPNManager
+
+    @State private var showRemoveProfileAlert = false
 
     var body: some View {
         NavigationStack {
@@ -27,17 +31,19 @@ struct SettingsView: View {
                         Text("SOCKS5").tag("SOCKS5")
                         Text("TCP").tag("TCP")
                     }
-                    LabeledContent("Listen IP") {
-                        TextField("127.0.0.1", text: $configStore.draft.listenIP)
-                            .multilineTextAlignment(.trailing)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                    }
-                    LabeledContent("Listen port") {
-                        TextField("18000", value: $configStore.draft.listenPort, format: .number)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                    }
+                    ValidatedTextRow(
+                        label: "Listen IP",
+                        placeholder: "127.0.0.1",
+                        text: $configStore.draft.listenIP,
+                        keyboard: .URL,
+                        error: ConfigStore.validateHost(configStore.draft.listenIP)
+                            ? nil : "Invalid IP or hostname"
+                    )
+                    ValidatedPortRow(
+                        label: "Listen port",
+                        placeholder: "18000",
+                        value: $configStore.draft.listenPort
+                    )
                     Toggle("Require SOCKS5 auth", isOn: $configStore.draft.socks5AuthEnabled)
                     if configStore.draft.socks5AuthEnabled {
                         LabeledContent("User") {
@@ -58,12 +64,20 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    LabeledContent("Upstream DNS") {
-                        TextField("1.1.1.1:53", text: $configStore.draft.systemVPNDNSResolver)
-                            .multilineTextAlignment(.trailing)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                            .keyboardType(.URL)
+                    ValidatedTextRow(
+                        label: "Upstream DNS",
+                        placeholder: "1.1.1.1:53",
+                        text: $configStore.draft.systemVPNDNSResolver,
+                        keyboard: .URL,
+                        error: ConfigStore.validateHostPort(configStore.draft.systemVPNDNSResolver)
+                            ? nil : "Expected host:port (e.g. 1.1.1.1:53 or [::1]:53)"
+                    )
+                    if vpn.profileInstalled {
+                        Button(role: .destructive) {
+                            showRemoveProfileAlert = true
+                        } label: {
+                            Label("Remove VPN profile", systemImage: "trash")
+                        }
                     }
                 } header: {
                     Text("System VPN")
@@ -122,6 +136,14 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .alert("Remove VPN profile?", isPresented: $showRemoveProfileAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Remove", role: .destructive) {
+                    Task { await vpn.removeProfile() }
+                }
+            } message: {
+                Text("Deletes the DNSpire entry from iOS VPN settings. You'll be prompted for permission again the next time you enable System VPN.")
+            }
         }
     }
 }
@@ -267,6 +289,60 @@ private enum CompressionOption: Int, CaseIterable, Identifiable {
         case .zstd: return "ZSTD"
         case .lz4:  return "LZ4"
         case .zlib: return "ZLIB"
+        }
+    }
+}
+
+/// Form row with a trailing TextField that surfaces an inline validation error
+/// below when `error` is non-nil. Used by Local Proxy / System VPN sections.
+private struct ValidatedTextRow: View {
+    let label: String
+    let placeholder: String
+    @Binding var text: String
+    let keyboard: UIKeyboardType
+    let error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                Spacer()
+                TextField(placeholder, text: $text)
+                    .multilineTextAlignment(.trailing)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(keyboard)
+            }
+            if let error {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+}
+
+private struct ValidatedPortRow: View {
+    let label: String
+    let placeholder: String
+    @Binding var value: Int
+
+    private var isValid: Bool { ConfigStore.validatePort(value) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                Spacer()
+                TextField(placeholder, value: $value, format: .number)
+                    .keyboardType(.numberPad)
+                    .multilineTextAlignment(.trailing)
+            }
+            if !isValid {
+                Text("Port must be between 1 and 65535")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
         }
     }
 }

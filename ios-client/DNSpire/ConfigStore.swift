@@ -332,6 +332,37 @@ final class ConfigStore: ObservableObject {
         return v.isEmpty ? "1.1.1.1:53" : v
     }
 
+    /// Whether a host string parses as an IPv4/IPv6 literal or DNS label set the
+    /// upstream client will accept.
+    static func validateHost(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return ResolverEntry.isValid(host: trimmed, port: 1)
+    }
+
+    static func validatePort(_ port: Int) -> Bool {
+        (1...65535).contains(port)
+    }
+
+    /// Validate a `host:port` (or `[v6]:port`) target — same shape the system
+    /// VPN extension expects for its DNS-over-TCP resolver.
+    static func validateHostPort(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if trimmed.hasPrefix("[") {
+            guard let closing = trimmed.firstIndex(of: "]") else { return false }
+            let host = String(trimmed[trimmed.index(after: trimmed.startIndex)..<closing])
+            let rest = String(trimmed[trimmed.index(after: closing)...])
+            guard rest.hasPrefix(":"), let port = Int(rest.dropFirst()) else { return false }
+            return ResolverEntry.isValid(host: host, port: port)
+        }
+        guard let colon = trimmed.lastIndex(of: ":") else { return false }
+        let host = String(trimmed[..<colon])
+        let portStr = trimmed[trimmed.index(after: colon)...]
+        guard let port = Int(portStr) else { return false }
+        return ResolverEntry.isValid(host: host, port: port)
+    }
+
     /// Serialize enabled, valid resolvers into the text format the upstream
     /// client expects in client_resolvers.txt: one entry per line, "IP" or
     /// "IP:PORT". Invalid or disabled entries are dropped.

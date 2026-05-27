@@ -25,12 +25,17 @@ final class TunnelController: ObservableObject {
     @Published private(set) var socksAddress: String = ""
     @Published private(set) var lastError: String?
 
+    /// True only once the Go runtime has reported `connected`. Start() returns
+    /// after bootstrap, but the SOCKS5 listener is brought up during the
+    /// runtime goroutine — using just `!socksAddress.isEmpty` would flash the
+    /// "Proxy ready" badge before the port is actually accepting connections.
     var isProxyReady: Bool {
-        !socksAddress.isEmpty && status != .error
+        status == .connected && !socksAddress.isEmpty
     }
 
     private var tunnel: DNSpireMobileTunnel?
     private weak var logStore: LogStore?
+    private let backgroundKeeper = BackgroundAudioKeeper()
 
     /// Hooks the controller up to a LogStore so Go-side log lines surface in
     /// the UI's Logs tab. Called once from DNSpireApp.task.
@@ -62,16 +67,26 @@ final class TunnelController: ObservableObject {
             try t.start(configJSON, resolversText: resolversText, scratchDir: scratchDir)
             self.socksAddress = t.socksAddress()
             self.lastError = nil
+            // The SOCKS5 listener lives in this app's process — without an
+            // active audio session iOS suspends us ~30s after backgrounding
+            // and the proxy dies. The keeper renders silence to claim a
+            // .playback audio session and keep the process awake. Stops in
+            // stop()/error paths so we don't drain battery when idle.
+            backgroundKeeper.start()
         } catch {
             self.tunnel = nil
             self.status = .error
             self.lastError = error.localizedDescription
             self.logStore?.append("[ui] start failed: \(error.localizedDescription)")
+            backgroundKeeper.stop()
         }
     }
 
     func stop() {
-        guard let t = tunnel else { return }
+        guard let t = tunnel else {
+            backgroundKeeper.stop()
+            return
+        }
         do {
             try t.stop()
         } catch {
@@ -81,6 +96,7 @@ final class TunnelController: ObservableObject {
         self.socksAddress = ""
         self.status = .stopped
         self.statusDetail = ""
+        backgroundKeeper.stop()
     }
 
     private func applyStatusString(_ state: String) {

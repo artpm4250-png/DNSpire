@@ -55,6 +55,14 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         ITSAppUsesNonExemptEncryption: false
+        # Keep the SOCKS5 listener alive while the user switches to Happ /
+        # Shadowrocket. Without a background mode iOS suspends DNSpire ~30s
+        # after backgrounding and the listener dies. BackgroundAudioKeeper
+        # pushes silent audio through AVAudioEngine while a proxy tunnel is
+        # active; the system VPN path doesn't need this — the extension owns
+        # its own runtime.
+        UIBackgroundModes:
+          - audio
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.dnspire.ios

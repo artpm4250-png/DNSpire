@@ -27,6 +27,10 @@ final class VPNManager: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var goStatus: String = ""
     @Published private(set) var stats: VPNStats = .init()
+    /// True once a NETunnelProviderManager exists in the system preferences
+    /// (i.e. the user has approved at least one VPN connect). Drives the
+    /// "Remove profile" button visibility.
+    @Published private(set) var profileInstalled: Bool = false
 
     private static let bundleId = "com.dnspire.ios.tunnel"
 
@@ -56,8 +60,10 @@ final class VPNManager: ObservableObject {
     func reloadManager() async {
         do {
             let managers = try await NETunnelProviderManager.loadAllFromPreferences()
-            let mgr = managers.first ?? NETunnelProviderManager()
+            let existing = managers.first
+            let mgr = existing ?? NETunnelProviderManager()
             self.manager = mgr
+            self.profileInstalled = existing != nil
             self.observeStatusChanges(mgr)
             self.updateStatus(from: mgr.connection.status)
         } catch {
@@ -88,6 +94,7 @@ final class VPNManager: ObservableObject {
             try await mgr.loadFromPreferences()
 
             self.manager = mgr
+            self.profileInstalled = true
             self.observeStatusChanges(mgr)
             self.lastLogSeq = 0
             self.stats = .init()
@@ -106,11 +113,15 @@ final class VPNManager: ObservableObject {
     /// Remove the VPN profile entirely (the user can also do this from
     /// Settings → VPN). Useful when the user wants to revoke permission.
     func removeProfile() async {
-        guard let mgr = manager else { return }
+        guard let mgr = manager, profileInstalled else { return }
         do {
             try await mgr.removeFromPreferences()
             self.manager = nil
+            self.profileInstalled = false
             self.status = .disabled
+            self.goStatus = ""
+            self.stats = .init()
+            self.lastError = nil
         } catch {
             self.lastError = error.localizedDescription
         }

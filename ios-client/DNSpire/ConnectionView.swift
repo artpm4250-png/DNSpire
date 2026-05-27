@@ -101,6 +101,17 @@ struct ConnectionView: View {
         }
     }
 
+    /// True if either backend is doing work. Used to lock the mode picker so
+    /// the user can't switch tabs underneath a live tunnel.
+    private var isAnyTunnelBusy: Bool {
+        let proxyBusy = tunnel.status != .stopped && tunnel.status != .error
+        let vpnBusy = vpn.status == .connected ||
+                      vpn.status == .connecting ||
+                      vpn.status == .reasserting ||
+                      vpn.status == .disconnecting
+        return proxyBusy || vpnBusy
+    }
+
     private var missingFields: [String] {
         var out: [String] = []
         if configStore.draft.encryptionKey.isEmpty {
@@ -123,9 +134,19 @@ struct ConnectionView: View {
     private var modePicker: some View {
         VStack(spacing: 10) {
             ForEach(TunnelMode.allCases) { m in
-                ModeCard(mode: m, selected: mode == m) {
+                ModeCard(
+                    mode: m,
+                    selected: mode == m,
+                    locked: isAnyTunnelBusy && mode != m
+                ) {
+                    guard !isAnyTunnelBusy else { return }
                     modeRaw = m.rawValue
                 }
+            }
+            if isAnyTunnelBusy {
+                Text("Disconnect to switch modes.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.top, 16)
@@ -554,6 +575,9 @@ private struct TrafficCard: View {
 private struct ModeCard: View {
     let mode: TunnelMode
     let selected: Bool
+    /// True when the other mode is currently active — this card must not be
+    /// tappable, and renders dimmed so the user understands why.
+    var locked: Bool = false
     let onTap: () -> Void
 
     var body: some View {
@@ -563,7 +587,7 @@ private struct ModeCard: View {
                     Circle()
                         .fill(selected ? Color.accentColor : Color(.tertiarySystemFill))
                         .frame(width: 40, height: 40)
-                    Image(systemName: mode.icon)
+                    Image(systemName: locked ? "lock.fill" : mode.icon)
                         .font(.body.weight(.semibold))
                         .foregroundStyle(selected ? Color.white : Color.secondary)
                 }
@@ -591,8 +615,10 @@ private struct ModeCard: View {
                 RoundedRectangle(cornerRadius: 14)
                     .stroke(selected ? Color.accentColor : Color.clear, lineWidth: 2)
             )
+            .opacity(locked ? 0.45 : 1.0)
         }
         .buttonStyle(.plain)
+        .disabled(locked)
     }
 }
 
