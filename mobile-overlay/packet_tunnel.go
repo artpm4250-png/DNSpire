@@ -71,6 +71,14 @@ type PacketTunnel struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	running atomic.Bool
+
+	// Traffic counters, surfaced to the host via the gomobile-friendly Bytes*
+	// accessors. Updated by the TCP forwarder and the DNS-over-TCP shim.
+	bytesUp           atomic.Int64
+	bytesDown         atomic.Int64
+	tcpFlowsAccepted  atomic.Int64
+	tcpFlowsActive    atomic.Int64
+	dnsQueriesHandled atomic.Int64
 }
 
 // NewPacketTunnel allocates a packet tunnel handle. It does not start any
@@ -112,6 +120,31 @@ func (pt *PacketTunnel) IsRunning() bool { return pt.running.Load() }
 // the extension; useful in tests).
 func (pt *PacketTunnel) SocksAddress() string { return pt.tunnel.SocksAddress() }
 
+// BytesUp returns cumulative bytes that have flowed device→tunnel since
+// Start (TCP payloads + DNS query bytes). Monotonic; reset on Start.
+func (pt *PacketTunnel) BytesUp() int64 { return pt.bytesUp.Load() }
+
+// BytesDown returns cumulative bytes that have flowed tunnel→device since
+// Start (TCP payloads + DNS response bytes). Monotonic; reset on Start.
+func (pt *PacketTunnel) BytesDown() int64 { return pt.bytesDown.Load() }
+
+// TCPFlowsAccepted is the lifetime count of inbound TCP flows the forwarder
+// dialed through SOCKS5. Includes flows that failed after CreateEndpoint.
+func (pt *PacketTunnel) TCPFlowsAccepted() int64 { return pt.tcpFlowsAccepted.Load() }
+
+// TCPFlowsActive is the current count of bidirectional TCP pipes the
+// forwarder is keeping open.
+func (pt *PacketTunnel) TCPFlowsActive() int64 { return pt.tcpFlowsActive.Load() }
+
+// DNSQueriesHandled is the lifetime count of UDP-53 queries the
+// DNS-over-TCP shim successfully resolved upstream.
+func (pt *PacketTunnel) DNSQueriesHandled() int64 { return pt.dnsQueriesHandled.Load() }
+
+// LastStatus returns the most recent status string emitted by the inner
+// Tunnel (e.g. "mtu_testing", "connected", "error:..."). Empty before
+// Start.
+func (pt *PacketTunnel) LastStatus() string { return pt.tunnel.LastStatus() }
+
 // Start brings up the inner MasterDnsVPN client, waits for its SOCKS5
 // listener to become reachable, then spins up the gVisor netstack and starts
 // the outbound packet pump. Non-blocking: returns once the netstack is ready.
@@ -127,6 +160,11 @@ func (pt *PacketTunnel) Start(configJSON, resolversText, scratchDir string) erro
 }
 
 func (pt *PacketTunnel) startInner(configJSON, resolversText, scratchDir string) error {
+	pt.bytesUp.Store(0)
+	pt.bytesDown.Store(0)
+	pt.tcpFlowsAccepted.Store(0)
+	pt.tcpFlowsActive.Store(0)
+	pt.dnsQueriesHandled.Store(0)
 	if err := pt.tunnel.Start(configJSON, resolversText, scratchDir); err != nil {
 		return fmt.Errorf("inner tunnel: %w", err)
 	}
@@ -277,15 +315,45 @@ func (pt *PacketTunnel) tcpHandler(r *tcp.ForwarderRequest) {
 			_ = local.Close()
 			return
 		}
-		go pipeAndClose(remote, local)
-		pipeAndClose(local, remote)
+		pt.tcpFlowsAccepted.Add(1)
+		pt.tcpFlowsActive.Add(1)
+		var halves sync.WaitGroup
+		halves.Add(2)
+		// local→remote is bytes the device sent out: "up".
+		go func() {
+			defer halves.Done()
+			pipeAndCount(remote, local, &pt.bytesUp)
+			_ = remote.Close()
+			_ = local.Close()
+		}()
+		// remote→local is bytes the device received: "down".
+		go func() {
+			defer halves.Done()
+			pipeAndCount(local, remote, &pt.bytesDown)
+			_ = local.Close()
+			_ = remote.Close()
+		}()
+		go func() {
+			halves.Wait()
+			pt.tcpFlowsActive.Add(-1)
+		}()
 	}()
 }
 
-func pipeAndClose(dst, src net.Conn) {
-	_, _ = io.Copy(dst, src)
-	_ = dst.Close()
-	_ = src.Close()
+func pipeAndCount(dst io.Writer, src io.Reader, counter *atomic.Int64) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return
+			}
+			counter.Add(int64(n))
+		}
+		if rerr != nil {
+			return
+		}
+	}
 }
 
 // tryInterceptDNS catches UDP-53 datagrams before they reach gVisor and shims
@@ -340,17 +408,20 @@ func (pt *PacketTunnel) tryInterceptDNS(data []byte) bool {
 	srcCopy := append([]byte(nil), src...)
 	dstCopy := append([]byte(nil), dst...)
 	payloadCopy := append([]byte(nil), payload...)
+	pt.bytesUp.Add(int64(len(payloadCopy)))
 
 	go func() {
 		resp, err := pt.resolveDoT(payloadCopy)
 		if err != nil || len(resp) == 0 {
 			return
 		}
+		pt.dnsQueriesHandled.Add(1)
 		// Response packet: from original destination → original source.
 		out := buildUDPResponse(dstCopy, srcCopy, dstPort, srcPort, resp, isIPv6)
 		if out == nil {
 			return
 		}
+		pt.bytesDown.Add(int64(len(resp)))
 		pt.mu.Lock()
 		cb := pt.callback
 		pt.mu.Unlock()

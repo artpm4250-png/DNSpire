@@ -28,6 +28,10 @@ struct ClientConfigDraft: Codable, Equatable {
     var rxTxWorkers: Int
     var maxPacketsPerBatch: Int
     var arqWindowSize: Int
+    /// Upstream DNS resolver the system-VPN extension shims UDP-53 traffic onto
+    /// (DNS-over-TCP through SOCKS5). Ignored in local-proxy mode. Format:
+    /// "host:port" or "[v6]:port".
+    var systemVPNDNSResolver: String
 
     static let `default` = ClientConfigDraft(
         domains: ["v.example.com"],
@@ -52,7 +56,8 @@ struct ClientConfigDraft: Codable, Equatable {
         setupPacketDuplicationCount: 2,
         rxTxWorkers: 4,
         maxPacketsPerBatch: 8,
-        arqWindowSize: 600
+        arqWindowSize: 600,
+        systemVPNDNSResolver: "1.1.1.1:53"
     )
 
     enum CodingKeys: String, CodingKey {
@@ -62,6 +67,7 @@ struct ClientConfigDraft: Codable, Equatable {
         case mtuTestRetries, mtuTestTimeout, mtuTestParallelism
         case packetDuplicationCount, setupPacketDuplicationCount
         case rxTxWorkers, maxPacketsPerBatch, arqWindowSize
+        case systemVPNDNSResolver
     }
 
     init(domains: [String],
@@ -86,7 +92,8 @@ struct ClientConfigDraft: Codable, Equatable {
          setupPacketDuplicationCount: Int,
          rxTxWorkers: Int,
          maxPacketsPerBatch: Int,
-         arqWindowSize: Int) {
+         arqWindowSize: Int,
+         systemVPNDNSResolver: String) {
         self.domains = domains
         self.encryptionKey = encryptionKey
         self.dataEncryptionMethod = dataEncryptionMethod
@@ -110,6 +117,7 @@ struct ClientConfigDraft: Codable, Equatable {
         self.rxTxWorkers = rxTxWorkers
         self.maxPacketsPerBatch = maxPacketsPerBatch
         self.arqWindowSize = arqWindowSize
+        self.systemVPNDNSResolver = systemVPNDNSResolver
     }
 
     init(from decoder: Decoder) throws {
@@ -141,6 +149,7 @@ struct ClientConfigDraft: Codable, Equatable {
         rxTxWorkers = try container.decodeIfPresent(Int.self, forKey: .rxTxWorkers) ?? fallback.rxTxWorkers
         maxPacketsPerBatch = try container.decodeIfPresent(Int.self, forKey: .maxPacketsPerBatch) ?? fallback.maxPacketsPerBatch
         arqWindowSize = try container.decodeIfPresent(Int.self, forKey: .arqWindowSize) ?? fallback.arqWindowSize
+        systemVPNDNSResolver = try container.decodeIfPresent(String.self, forKey: .systemVPNDNSResolver) ?? fallback.systemVPNDNSResolver
     }
 }
 
@@ -165,10 +174,55 @@ struct ResolverEntry: Codable, Equatable, Identifiable {
         return port == 53 ? cleanIP : "\(cleanIP):\(port)"
     }
 
-    static func parseList(_ text: String) -> [ResolverEntry] {
-        text
-            .components(separatedBy: CharacterSet(charactersIn: ",\n"))
-            .compactMap { parse($0) }
+    /// Parse a bulk text blob into resolver entries. Trims whitespace,
+    /// validates host/port, drops duplicates (first occurrence wins), and
+    /// preserves the `enabled` flag of any entry whose address matches one
+    /// already in `existing` (so toggling an entry off and editing the bulk
+    /// text doesn't silently re-enable it).
+    static func parseList(_ text: String, existing: [ResolverEntry] = []) -> [ResolverEntry] {
+        var enabledByKey: [String: Bool] = [:]
+        for entry in existing {
+            let key = entry.canonicalKey()
+            if !key.isEmpty, enabledByKey[key] == nil {
+                enabledByKey[key] = entry.enabled
+            }
+        }
+        var seen = Set<String>()
+        var out: [ResolverEntry] = []
+        for piece in text.components(separatedBy: CharacterSet(charactersIn: ",\n")) {
+            guard let entry = parse(piece) else { continue }
+            let key = entry.canonicalKey()
+            if seen.contains(key) { continue }
+            seen.insert(key)
+            var resolved = entry
+            if let prior = enabledByKey[key] {
+                resolved.enabled = prior
+            }
+            out.append(resolved)
+        }
+        return out
+    }
+
+    /// Lower-cased "host:port" for dedup and enabled-flag carryover. Empty if
+    /// the entry has no usable host.
+    func canonicalKey() -> String {
+        let host = ip.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !host.isEmpty else { return "" }
+        return "\(host):\(port)"
+    }
+
+    static func isValid(host: String, port: Int) -> Bool {
+        guard (1...65535).contains(port) else { return false }
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 253 else { return false }
+        // Accept anything resembling an IPv4/IPv6 literal or a DNS hostname.
+        if trimmed.contains(":") {
+            return trimmed.split(separator: ":").allSatisfy { seg in
+                seg.allSatisfy { $0.isHexDigit || $0 == "." }
+            }
+        }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_")
+        return trimmed.unicodeScalars.allSatisfy { allowed.contains($0) }
     }
 
     static func matchesOldDefaultPublic(_ resolvers: [ResolverEntry]) -> Bool {
@@ -183,24 +237,26 @@ struct ResolverEntry: Codable, Equatable, Identifiable {
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
 
+        var host = value
+        var port = 53
+
         if value.hasPrefix("["),
            let closing = value.firstIndex(of: "]") {
-            let host = String(value[value.index(after: value.startIndex)..<closing])
+            host = String(value[value.index(after: value.startIndex)..<closing])
             let rest = String(value[value.index(after: closing)...])
-            let port = rest.hasPrefix(":") ? Int(rest.dropFirst()) ?? 53 : 53
-            return .init(ip: host, port: port, enabled: true)
+            if rest.hasPrefix(":"), let p = Int(rest.dropFirst()) { port = p }
+        } else {
+            let colonCount = value.filter { $0 == ":" }.count
+            if colonCount == 1,
+               let colon = value.firstIndex(of: ":"),
+               let p = Int(value[value.index(after: colon)...]) {
+                host = String(value[..<colon]).trimmingCharacters(in: .whitespacesAndNewlines)
+                port = p
+            }
         }
 
-        let colonCount = value.filter { $0 == ":" }.count
-        if colonCount == 1,
-           let colon = value.firstIndex(of: ":"),
-           let port = Int(value[value.index(after: colon)...]) {
-            let host = String(value[..<colon]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !host.isEmpty else { return nil }
-            return .init(ip: host, port: port, enabled: true)
-        }
-
-        return .init(ip: value, port: 53, enabled: true)
+        guard isValid(host: host, port: port) else { return nil }
+        return .init(ip: host, port: port, enabled: true)
     }
 }
 
@@ -269,16 +325,23 @@ final class ConfigStore: ObservableObject {
         return String(data: data, encoding: .utf8)
     }
 
-    /// Serialize enabled resolvers into the text format the upstream client
-    /// expects in client_resolvers.txt: one entry per line, "IP" or "IP:PORT".
+    /// Trimmed `host:port` for the extension's DNS-over-TCP shim. Falls back to
+    /// the default if the user blanked the field.
+    func normalizedSystemVPNDNSResolver() -> String {
+        let v = draft.systemVPNDNSResolver.trimmingCharacters(in: .whitespacesAndNewlines)
+        return v.isEmpty ? "1.1.1.1:53" : v
+    }
+
+    /// Serialize enabled, valid resolvers into the text format the upstream
+    /// client expects in client_resolvers.txt: one entry per line, "IP" or
+    /// "IP:PORT". Invalid or disabled entries are dropped.
     func encodedResolversText() -> String {
         draft.resolvers
-            .filter { $0.enabled }
+            .filter { $0.enabled && ResolverEntry.isValid(host: $0.ip, port: $0.port) }
             .map { resolver in
                 let ip = resolver.ip.trimmingCharacters(in: .whitespacesAndNewlines)
                 return resolver.port == 53 ? ip : "\(ip):\(resolver.port)"
             }
-            .filter { !$0.isEmpty }
             .joined(separator: "\n")
     }
 

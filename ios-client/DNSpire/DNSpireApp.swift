@@ -16,6 +16,7 @@ struct DNSpireApp: App {
                 .environmentObject(vpn)
                 .task {
                     tunnel.attach(logStore: logStore)
+                    vpn.attach(logStore: logStore)
                 }
         }
     }

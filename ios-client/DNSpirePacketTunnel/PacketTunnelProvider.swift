@@ -13,9 +13,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var packetTunnel: DNSpireMobilePacketTunnel?
     private var running = false
 
+    private let stateLock = NSLock()
+    private var latestStatus: String = "stopped"
+    private let logRing = LogRing(capacity: 500)
+
     override func startTunnel(options: [String: NSObject]?,
                               completionHandler: @escaping (Error?) -> Void) {
         os_log("startTunnel", log: log, type: .info)
+        recordStatus("starting")
 
         guard
             let proto = protocolConfiguration as? NETunnelProviderProtocol,
@@ -23,6 +28,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             let configJSON = providerConfig["configJSON"] as? String,
             !configJSON.isEmpty
         else {
+            recordStatus("error:Missing providerConfiguration.configJSON")
             completionHandler(makeError(code: 1, "Missing providerConfiguration.configJSON"))
             return
         }
@@ -32,11 +38,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let pt = DNSpireMobileNewPacketTunnel()!
         pt.setLogCallback(LogSink { [weak self] line in
             guard let self else { return }
-            os_log("%{public}@", log: self.log, type: .info, line ?? "")
+            let text = line ?? ""
+            os_log("%{public}@", log: self.log, type: .info, text)
+            self.logRing.append(text)
         })
         pt.setStatusCallback(StatusSink { [weak self] state in
             guard let self else { return }
-            os_log("status=%{public}@", log: self.log, type: .info, state ?? "")
+            let text = state ?? ""
+            os_log("status=%{public}@", log: self.log, type: .info, text)
+            self.recordStatus(text)
+            self.logRing.append("[status] \(text)")
         })
         pt.setPacketCallback(PacketSink { [weak self] data in
             guard let self, let data, !data.isEmpty else { return }
@@ -55,6 +66,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             if let error {
                 os_log("setTunnelNetworkSettings failed: %{public}@",
                        log: self.log, type: .error, error.localizedDescription)
+                self.recordStatus("error:\(error.localizedDescription)")
                 completionHandler(error)
                 return
             }
@@ -69,6 +81,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             } catch {
                 os_log("packetTunnel.start failed: %{public}@",
                        log: self.log, type: .error, error.localizedDescription)
+                self.recordStatus("error:\(error.localizedDescription)")
                 completionHandler(error)
             }
         }
@@ -80,7 +93,44 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         running = false
         try? packetTunnel?.stop()
         packetTunnel = nil
+        recordStatus("stopped")
         completionHandler()
+    }
+
+    /// IPC entry point. The main app sends a JSON-encoded ProviderRequest via
+    /// `NETunnelProviderSession.sendProviderMessage` while the tunnel is
+    /// active, and we reply with a ProviderSnapshot.
+    override func handleAppMessage(_ messageData: Data,
+                                   completionHandler: ((Data?) -> Void)?) {
+        let request = (try? JSONDecoder().decode(ProviderRequest.self, from: messageData))
+            ?? ProviderRequest(op: "snapshot", sinceLogSeq: 0)
+        let snapshot = buildSnapshot(sinceLogSeq: request.sinceLogSeq ?? 0)
+        let data = (try? JSONEncoder().encode(snapshot)) ?? Data()
+        completionHandler?(data)
+    }
+
+    private func buildSnapshot(sinceLogSeq: Int) -> ProviderSnapshot {
+        let drained = logRing.drain(since: sinceLogSeq)
+        let pt = packetTunnel
+        stateLock.lock()
+        let status = latestStatus
+        stateLock.unlock()
+        return ProviderSnapshot(
+            status: status,
+            bytesUp: pt?.bytesUp() ?? 0,
+            bytesDown: pt?.bytesDown() ?? 0,
+            tcpFlowsAccepted: pt?.tcpFlowsAccepted() ?? 0,
+            tcpFlowsActive: pt?.tcpFlowsActive() ?? 0,
+            dnsQueriesHandled: pt?.dnsQueriesHandled() ?? 0,
+            logs: drained.entries,
+            lastLogSeq: drained.lastSeq
+        )
+    }
+
+    private func recordStatus(_ state: String) {
+        stateLock.lock()
+        latestStatus = state
+        stateLock.unlock()
     }
 
     /// NEPacketTunnelNetworkSettings: claim a default route, set DNS to a
@@ -154,4 +204,35 @@ private final class PacketSink: NSObject, DNSpireMobilePacketCallbackProtocol {
     let handler: (Data?) -> Void
     init(handler: @escaping (Data?) -> Void) { self.handler = handler }
     func onPacket(_ data: Data?) { handler(data) }
+}
+
+/// Bounded log ring with monotonically increasing sequence numbers. The host
+/// app polls `drain(since:)` to fetch new entries; older entries are evicted
+/// when the buffer is full, so the app may legitimately skip seq numbers if it
+/// polls too slowly.
+private final class LogRing {
+    private let capacity: Int
+    private let lock = NSLock()
+    private var entries: [ProviderLogEntry] = []
+    private var nextSeq: Int = 1
+
+    init(capacity: Int) { self.capacity = capacity }
+
+    func append(_ text: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        entries.append(ProviderLogEntry(seq: nextSeq, text: text))
+        nextSeq += 1
+        if entries.count > capacity {
+            entries.removeFirst(entries.count - capacity)
+        }
+    }
+
+    func drain(since: Int) -> (entries: [ProviderLogEntry], lastSeq: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        let fresh = entries.filter { $0.seq > since }
+        let last = entries.last?.seq ?? since
+        return (fresh, last)
+    }
 }

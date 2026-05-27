@@ -57,6 +57,20 @@ struct SettingsView: View {
                     ResolverEditor(resolvers: $configStore.draft.resolvers)
                 }
 
+                Section {
+                    LabeledContent("Upstream DNS") {
+                        TextField("1.1.1.1:53", text: $configStore.draft.systemVPNDNSResolver)
+                            .multilineTextAlignment(.trailing)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .keyboardType(.URL)
+                    }
+                } header: {
+                    Text("System VPN")
+                } footer: {
+                    Text("DNS-over-TCP target the packet-tunnel extension shims UDP-53 onto. Use a resolver reachable through your DNS tunnel (e.g. 1.1.1.1:53, 8.8.8.8:53). Ignored in SOCKS5 proxy mode.")
+                }
+
                 Section("Performance") {
                     Picker("Resolving strategy", selection: $configStore.draft.resolverBalancingStrategy) {
                         ForEach(ResolverBalancingOption.allCases) { option in
@@ -205,32 +219,34 @@ private struct ResolverEditor: View {
 
     var body: some View {
         Button {
-            editorText = resolverText
+            editorText = bulkText
             showingEditor = true
         } label: {
             HStack {
-                Label("Edit resolvers", systemImage: "square.and.pencil")
+                Label("Bulk edit", systemImage: "square.and.pencil")
                 Spacer()
-                Text("\(activeResolvers.count)")
+                Text("\(activeCount)/\(resolvers.count)")
                     .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
         }
 
-        Group {
-            if activeResolvers.isEmpty {
-                Text("No resolvers")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(activeResolvers.prefix(6)) { resolver in
-                    Text(resolver.displayAddress)
-                        .font(.subheadline)
-                        .monospaced()
-                }
-                if activeResolvers.count > 6 {
-                    Text("+\(activeResolvers.count - 6)")
-                        .foregroundStyle(.secondary)
-                }
+        if resolvers.isEmpty {
+            Text("No resolvers")
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(Array(resolvers.enumerated()), id: \.element.id) { idx, _ in
+                ResolverRow(
+                    resolver: $resolvers[idx],
+                    onDelete: { resolvers.remove(at: idx) }
+                )
             }
+        }
+
+        Button {
+            resolvers.append(ResolverEntry(ip: "", port: 53, enabled: true))
+        } label: {
+            Label("Add resolver", systemImage: "plus.circle")
         }
         .sheet(isPresented: $showingEditor) {
             NavigationStack {
@@ -258,7 +274,7 @@ private struct ResolverEditor: View {
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Apply") {
-                            resolvers = ResolverEntry.parseList(editorText)
+                            resolvers = ResolverEntry.parseList(editorText, existing: resolvers)
                             showingEditor = false
                         }
                     }
@@ -267,12 +283,102 @@ private struct ResolverEditor: View {
         }
     }
 
-    private var activeResolvers: [ResolverEntry] {
-        resolvers
-            .filter { $0.enabled && !$0.ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var activeCount: Int {
+        resolvers.filter { $0.enabled && ResolverEntry.isValid(host: $0.ip, port: $0.port) }.count
     }
 
-    private var resolverText: String {
-        activeResolvers.map(\.displayAddress).joined(separator: "\n")
+    private var bulkText: String {
+        resolvers
+            .filter { !$0.ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map(\.displayAddress)
+            .joined(separator: "\n")
+    }
+
+}
+
+private struct ResolverRow: View {
+    @Binding var resolver: ResolverEntry
+    let onDelete: () -> Void
+
+    @State private var draftText: String = ""
+    @State private var didLoad = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button {
+                resolver.enabled.toggle()
+            } label: {
+                Image(systemName: resolver.enabled ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(resolver.enabled ? .accentColor : .secondary)
+                    .font(.body)
+            }
+            .buttonStyle(.borderless)
+
+            VStack(alignment: .leading, spacing: 2) {
+                TextField("192.0.2.10:53", text: $draftText)
+                    .font(.subheadline.monospaced())
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.numbersAndPunctuation)
+                    .onAppear {
+                        guard !didLoad else { return }
+                        didLoad = true
+                        draftText = initialText
+                    }
+                    .onChange(of: draftText) { _, new in
+                        commit(new)
+                    }
+                if !isValid {
+                    Text("Invalid address")
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "minus.circle.fill")
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
+    private var initialText: String {
+        let trimmed = resolver.ip.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        return resolver.displayAddress
+    }
+
+    private var isValid: Bool {
+        let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+        return ResolverEntry.isValid(host: resolver.ip, port: resolver.port)
+    }
+
+    private func commit(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            resolver.ip = ""
+            resolver.port = 53
+            return
+        }
+        if trimmed.hasPrefix("["), let closing = trimmed.firstIndex(of: "]") {
+            resolver.ip = String(trimmed[trimmed.index(after: trimmed.startIndex)..<closing])
+            let rest = String(trimmed[trimmed.index(after: closing)...])
+            resolver.port = rest.hasPrefix(":") ? Int(rest.dropFirst()) ?? 53 : 53
+            return
+        }
+        let colonCount = trimmed.filter { $0 == ":" }.count
+        if colonCount == 1,
+           let colon = trimmed.firstIndex(of: ":"),
+           let port = Int(trimmed[trimmed.index(after: colon)...]) {
+            resolver.ip = String(trimmed[..<colon])
+            resolver.port = port
+            return
+        }
+        resolver.ip = trimmed
+        resolver.port = 53
     }
 }

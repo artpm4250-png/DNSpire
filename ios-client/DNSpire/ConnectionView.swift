@@ -46,7 +46,7 @@ struct ConnectionView: View {
                         )
                             .padding(.top, 8)
                     } else {
-                        VPNBadge(status: vpn.status)
+                        VPNBadge(status: vpn.status, goStatus: vpn.goStatus)
                             .padding(.top, 8)
                     }
 
@@ -54,6 +54,10 @@ struct ConnectionView: View {
 
                     if mode == .proxy, !tunnel.socksAddress.isEmpty {
                         ProxyCard(address: tunnel.socksAddress)
+                    }
+
+                    if mode == .systemVPN, vpn.status == .connected || vpn.status == .reasserting {
+                        TrafficCard(stats: vpn.stats)
                     }
 
                     if let err = currentError {
@@ -138,7 +142,8 @@ struct ConnectionView: View {
                     return
                 }
                 let resolvers = configStore.encodedResolversText()
-                Task { await vpn.connect(configJSON: json, resolversText: resolvers) }
+                let dns = configStore.normalizedSystemVPNDNSResolver()
+                Task { await vpn.connect(configJSON: json, resolversText: resolvers, dnsResolver: dns) }
             }
         } label: {
             Text(active ? "Disconnect" : "Enable System VPN")
@@ -182,7 +187,7 @@ struct ConnectionView: View {
 
     private var enabledResolverCount: Int {
         configStore.draft.resolvers.filter {
-            $0.enabled && !$0.ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            $0.enabled && ResolverEntry.isValid(host: $0.ip, port: $0.port)
         }.count
     }
 
@@ -270,6 +275,7 @@ private struct StatusBadge: View {
 
 private struct VPNBadge: View {
     let status: VPNStatus
+    let goStatus: String
 
     var body: some View {
         VStack(spacing: 8) {
@@ -282,7 +288,7 @@ private struct VPNBadge: View {
                         .foregroundStyle(.white)
                 )
             Text(label).font(.headline)
-            Text("System-wide VPN").font(.caption).foregroundStyle(.secondary)
+            Text(detail).font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -295,6 +301,23 @@ private struct VPNBadge: View {
         case .disconnected:  return "Disconnected"
         case .disabled:      return "Profile not installed"
         case .unknown:       return "Unknown"
+        }
+    }
+
+    private var detail: String {
+        let go = goStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !go.isEmpty else { return "System-wide VPN" }
+        if go.hasPrefix("error:") {
+            return String(go.dropFirst("error:".count))
+        }
+        switch go {
+        case "starting":      return "Bootstrapping…"
+        case "mtu_testing":   return "Probing MTU…"
+        case "session_init":  return "Initializing session…"
+        case "connected":     return "Tunnel up"
+        case "reconnecting":  return "Reconnecting…"
+        case "stopped":       return "Stopped"
+        default:              return go
         }
     }
 
@@ -371,5 +394,58 @@ private struct ErrorCard: View {
         .padding()
         .background(Color.red.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private struct TrafficCard: View {
+    let stats: VPNStats
+
+    private static let formatter: ByteCountFormatter = {
+        let f = ByteCountFormatter()
+        f.allowedUnits = [.useKB, .useMB, .useGB]
+        f.countStyle = .binary
+        return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: "chart.bar.xaxis").font(.title2)
+                Text("Traffic").font(.headline)
+                Spacer()
+            }
+            Divider()
+            HStack {
+                metric(systemImage: "arrow.up", label: "Up", value: Self.formatter.string(fromByteCount: stats.bytesUp))
+                Spacer()
+                metric(systemImage: "arrow.down", label: "Down", value: Self.formatter.string(fromByteCount: stats.bytesDown))
+            }
+            Divider()
+            row("Active TCP", "\(stats.tcpFlowsActive)")
+            row("Total TCP", "\(stats.tcpFlowsAccepted)")
+            row("DNS queries", "\(stats.dnsQueriesHandled)")
+        }
+        .padding()
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func metric(systemImage: String, label: String, value: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.caption).foregroundStyle(.secondary)
+                Text(value).font(.body).monospacedDigit()
+            }
+        }
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Text(value).monospacedDigit()
+        }
+        .font(.subheadline)
     }
 }
