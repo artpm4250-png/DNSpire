@@ -26,14 +26,16 @@ final class ServerTestRunner: ObservableObject {
     @Published private(set) var outcomes: [UUID: Outcome] = [:]
     @Published private(set) var isRunning = false
 
-    /// Total wall-clock budget per server probe.
-    private static let defaultTimeoutMs = 20_000
+    /// Total wall-clock budget per server probe. `nonisolated` so it can be
+    /// referenced as a default argument (call-site default-arg evaluation is
+    /// treated as non-isolated by Swift 6).
+    nonisolated static let defaultTimeoutMs = 20_000
 
     /// Cap on in-flight probes. Each probe holds one host thread blocked on
     /// the synchronous gomobile call and opens UDP sockets per resolver;
     /// 4 is plenty for ranking, won't fan out resolver UDP traffic enough
     /// to look like a flood.
-    private static let maxParallel = 4
+    nonisolated static let maxParallel = 4
 
     func reset() {
         outcomes = [:]
@@ -122,17 +124,24 @@ final class ServerTestRunner: ObservableObject {
             return .fail(reason: "config")
         }
         return await Task.detached(priority: .userInitiated) { () -> Outcome in
-            do {
-                let ms = try DNSpireMobileProbeServer(
-                    configJSON,
-                    resolversText: resolversText,
-                    scratchDir: scratchDir,
-                    timeoutMs: timeoutMs
-                )
+            // gomobile bound this free function in its raw out-param form
+            // (Bool return + Int64*/NSError* out-params) rather than as a
+            // throwing wrapper. Both forms exist for methods on classes, but
+            // for package-level funcs with (int64, error) return only the
+            // raw form is generated — call it positionally.
+            var ms: Int64 = 0
+            var nsError: NSError?
+            let ok = DNSpireMobileProbeServer(
+                configJSON, resolversText, scratchDir, timeoutMs,
+                &ms, &nsError
+            )
+            if ok {
                 return .ok(ms: Int(ms))
-            } catch {
-                return Self.categorize(error)
             }
+            if let nsError {
+                return Self.categorize(nsError)
+            }
+            return .fail(reason: "error")
         }.value
     }
 
