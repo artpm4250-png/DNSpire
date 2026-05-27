@@ -7,6 +7,10 @@ struct SettingsView: View {
 
     @State private var showRemoveProfileAlert = false
 
+    /// Mirrors the same `@AppStorage` key written by [[DNSpireApp]]. SwiftUI
+    /// keeps both views in sync via UserDefaults.
+    @AppStorage("DNSpire.autoPickFastestEnabled") private var autoPickEnabled: Bool = false
+
     private var isValidVerifyURL: Bool {
         let v = configStore.draft.verifyURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if v.isEmpty { return true }
@@ -122,10 +126,11 @@ struct SettingsView: View {
                             Text(option.label).tag(option.rawValue)
                         }
                     }
+                    Toggle("Auto-pick fastest on launch", isOn: $autoPickEnabled)
                 } header: {
                     Text("Performance")
                 } footer: {
-                    Text("Resolving strategy picks which DNS resolvers to send queries through. Compression is applied to tunnel payloads larger than the threshold in Advanced.")
+                    Text("Resolving strategy picks which DNS resolvers to send queries through. Compression is applied to tunnel payloads larger than the threshold in Advanced. Auto-pick switches the active server to the fastest profile from your last “Test all” run (results must be under 7 days old, and only applied when no tunnel is active).")
                 }
 
                 Section {

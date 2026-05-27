@@ -237,6 +237,10 @@ struct ProfileSliceSheet: View {
     @State private var renameText: String = ""
     @State private var shareLink: ShareLinkItem?
     @State private var importing = false
+    /// Server-row IDs whose per-resolver drill-down is currently expanded.
+    /// Lives in the sheet (not in `ServerTestRunner`) because expansion is a
+    /// UI concern that shouldn't survive a sheet dismissal.
+    @State private var expandedDrillDown: Set<UUID> = []
 
     private struct ShareLinkItem: Identifiable {
         let id = UUID()
@@ -253,6 +257,9 @@ struct ProfileSliceSheet: View {
                                 slice: slice,
                                 onProbe: { probeOne(id: item.id) }
                             ))
+                        if slice == .server, expandedDrillDown.contains(item.id) {
+                            drillDownRows(for: item.id)
+                        }
                     }
                 }
                 Section {
@@ -371,6 +378,8 @@ struct ProfileSliceSheet: View {
 
     private func row(id: UUID, name: String) -> some View {
         let isActive = id == activeID
+        let hasDrillDown = slice == .server && !(testRunner.details[id]?.isEmpty ?? true)
+        let isExpanded = expandedDrillDown.contains(id)
         return Button {
             guard !isActive else { return }
             pendingSwitch = PendingSwitch(id: id, name: name)
@@ -390,10 +399,101 @@ struct ProfileSliceSheet: View {
                 if slice == .server {
                     serverBadge(for: id)
                 }
+                if hasDrillDown {
+                    Button {
+                        toggleDrillDown(id)
+                    } label: {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isExpanded ? "Hide resolver detail" : "Show resolver detail")
+                }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func toggleDrillDown(_ id: UUID) {
+        if expandedDrillDown.contains(id) {
+            expandedDrillDown.remove(id)
+        } else {
+            expandedDrillDown.insert(id)
+        }
+    }
+
+    /// Renders per-resolver rows for `serverID` as inset list rows beneath the
+    /// server row. Groups multiple connections to the same resolver (one per
+    /// server domain) into a single row that lights up only when every
+    /// underlying connection succeeded — a partial success is reported with
+    /// an amber dot and the count of valid/total domains.
+    @ViewBuilder
+    private func drillDownRows(for serverID: UUID) -> some View {
+        let rows = testRunner.details[serverID] ?? []
+        let groups = Self.groupByResolver(rows)
+        ForEach(groups, id: \.resolver) { g in
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(drillTint(g))
+                    .frame(width: 6, height: 6)
+                Text(g.resolver)
+                    .font(.caption.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                if g.total > 1 {
+                    Text("\(g.valid)/\(g.total)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+                if g.valid > 0 {
+                    Text("\(g.medianMtuMs) ms")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("no MTU")
+                        .font(.caption2)
+                        .foregroundStyle(.red.opacity(0.85))
+                }
+            }
+            .padding(.leading, 36)
+            .padding(.vertical, 2)
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color(.tertiarySystemBackground).opacity(0.5))
+        }
+    }
+
+    private struct ResolverGroup {
+        let resolver: String
+        let valid: Int
+        let total: Int
+        let medianMtuMs: Int
+    }
+
+    private static func groupByResolver(_ rows: [ServerTestRunner.ResolverProbeRow]) -> [ResolverGroup] {
+        var order: [String] = []
+        var byResolver: [String: [ServerTestRunner.ResolverProbeRow]] = [:]
+        for r in rows {
+            if byResolver[r.resolver] == nil { order.append(r.resolver) }
+            byResolver[r.resolver, default: []].append(r)
+        }
+        return order.map { key in
+            let bucket = byResolver[key] ?? []
+            let valid = bucket.filter(\.valid).count
+            let mtus = bucket.filter(\.valid).map(\.mtuResolveMs).sorted()
+            let median = mtus.isEmpty ? 0 : mtus[mtus.count / 2]
+            return ResolverGroup(resolver: key, valid: valid, total: bucket.count, medianMtuMs: median)
+        }
+    }
+
+    private func drillTint(_ g: ResolverGroup) -> Color {
+        if g.valid == 0 { return .red }
+        if g.valid == g.total { return .green }
+        return .orange
     }
 
     /// Prefer the transient `outcomes` map (covers `.pending` / `.running`

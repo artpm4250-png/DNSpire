@@ -10,6 +10,13 @@ struct DNSpireApp: App {
     @StateObject private var testRunner = ServerTestRunner()
     @StateObject private var mtuHints = MTUHintStore()
 
+    /// User-controlled opt-in. When true, on app launch DNSpire compares the
+    /// active server profile against persisted [[ServerTestRunner]] results
+    /// and silently switches to the fastest `.ok` candidate (provided no
+    /// tunnel is active). Default off because changing the active server is
+    /// a user choice we shouldn't override without consent.
+    @AppStorage("DNSpire.autoPickFastestEnabled") private var autoPickEnabled: Bool = false
+
     @State private var importAlert: ImportAlert?
 
     private struct ImportAlert: Identifiable {
@@ -35,6 +42,9 @@ struct DNSpireApp: App {
                     let knownIDs = Set(profileStore.servers.map(\.id))
                     testRunner.prune(to: knownIDs)
                     mtuHints.prune(to: knownIDs)
+                    if autoPickEnabled {
+                        await applyAutoPickIfIdle()
+                    }
                 }
                 .onOpenURL { url in
                     handleIncoming(url)
@@ -45,6 +55,29 @@ struct DNSpireApp: App {
                           dismissButton: .default(Text("OK")))
                 }
         }
+    }
+
+    /// Switch `activeServerID` to the lowest-latency `.ok` candidate from
+    /// `testRunner.results` — but only if no tunnel is up. `vpn.reloadManager`
+    /// is awaited so the NETunnelProviderManager status is settled before we
+    /// decide; otherwise an in-flight `.connecting` would look identical to
+    /// `.disconnected`. Refuses to switch when the user has only one server
+    /// or when the current active is already fastest.
+    @MainActor
+    private func applyAutoPickIfIdle() async {
+        await vpn.reloadManager()
+        let busy = vpn.status == .connected
+            || vpn.status == .connecting
+            || vpn.status == .reasserting
+        guard !busy else { return }
+        guard tunnel.status == .stopped else { return }
+        guard profileStore.servers.count >= 2 else { return }
+        let candidates = profileStore.servers.map(\.id)
+        guard let best = testRunner.fastestServerID(among: candidates) else { return }
+        guard best.id != profileStore.activeServerID else { return }
+        let name = profileStore.servers.first { $0.id == best.id }?.name ?? "?"
+        profileStore.setActiveServer(best.id, applying: &configStore.draft)
+        logStore.append("[auto] picked fastest server '\(name)' (\(best.ms) ms)")
     }
 
     private func handleIncoming(_ url: URL) {

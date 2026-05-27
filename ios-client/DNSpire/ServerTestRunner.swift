@@ -6,10 +6,12 @@ import DNSpireCore
 /// surface per-server latency / failure. Drives the "Test all" affordance in
 /// [[ProfileSliceSheet]] (Server slice). See plan `playful-churning-eclipse`.
 ///
-/// Each probe calls `DNSpireMobileProbeServer` — a one-shot handshake
+/// Each probe calls `DNSpireMobileProbeServerDetailed` — a one-shot handshake
 /// (`BootstrapLoadedConfig` → `RunInitialMTUTests` → `InitializeSession`) that
 /// tears itself down and never binds the SOCKS5 listener, so probes are safe
-/// to run in parallel and concurrently with a live tunnel.
+/// to run in parallel and concurrently with a live tunnel. The "Detailed"
+/// variant additionally returns a `;`-separated per-resolver row list used
+/// for the drill-down view.
 ///
 /// The runner is a long-lived `@EnvironmentObject` (see `DNSpireApp`) so that
 /// outcomes survive sheet dismissals. Stable outcomes (`ok` / `timeout` /
@@ -37,8 +39,41 @@ final class ServerTestRunner: ObservableObject {
         let at: Date
     }
 
+    /// Per-resolver row reported by `ProbeServerDetailed`. One row per
+    /// (server-domain × resolver) pair the balancer settled on after the
+    /// MTU bisect — the UI groups them by resolver before display.
+    struct ResolverProbeRow: Equatable, Codable {
+        let resolver: String
+        let valid: Bool
+        let mtuResolveMs: Int
+
+        /// Parse the `resolver|valid|mtuResolveMs` form emitted by the Go
+        /// side. Returns nil for malformed rows so an unexpected field count
+        /// from a newer Go build silently downgrades to no drill-down rather
+        /// than crashing the persisted decode.
+        init?(field: Substring) {
+            let parts = field.split(separator: "|", omittingEmptySubsequences: false)
+            guard parts.count == 3 else { return nil }
+            guard let mtuMs = Int(parts[2]) else { return nil }
+            self.resolver = String(parts[0])
+            self.valid = parts[1] == "1"
+            self.mtuResolveMs = mtuMs
+        }
+
+        init(resolver: String, valid: Bool, mtuResolveMs: Int) {
+            self.resolver = resolver
+            self.valid = valid
+            self.mtuResolveMs = mtuResolveMs
+        }
+    }
+
     @Published private(set) var outcomes: [UUID: Outcome] = [:]
     @Published private(set) var results: [UUID: PersistedResult] = [:]
+    /// Per-server drill-down data from the latest probe (live or persisted).
+    /// Mirrors `outcomes` for transient (`.running`) state and `results` for
+    /// stable outcomes. Empty when the Go binding doesn't yet expose
+    /// `ProbeServerDetailed` (the legacy `ProbeServer` path leaves it empty).
+    @Published private(set) var details: [UUID: [ResolverProbeRow]] = [:]
     @Published private(set) var isRunning = false
     /// Monotonic counter incremented on each `testAll` start so the UI can
     /// reset its "Dismissed this suggestion" state whenever fresh data
@@ -58,16 +93,20 @@ final class ServerTestRunner: ObservableObject {
     nonisolated static let maxParallel = 4
 
     private static let persistKey = "DNSpire.ServerTestRunner.results.v1"
+    private static let detailsKey = "DNSpire.ServerTestRunner.details.v1"
 
     init() {
         results = Self.loadPersisted()
         outcomes = results.mapValues { $0.outcome }
+        details = Self.loadDetails()
     }
 
     func reset() {
         outcomes = [:]
         results = [:]
+        details = [:]
         UserDefaults.standard.removeObject(forKey: Self.persistKey)
+        UserDefaults.standard.removeObject(forKey: Self.detailsKey)
     }
 
     /// Maximum age for a persisted `.ok` result to still be considered a
@@ -108,7 +147,13 @@ final class ServerTestRunner: ObservableObject {
             outcomes.removeValue(forKey: id)
             changed = true
         }
+        var detailsChanged = false
+        for id in details.keys where !liveServerIDs.contains(id) {
+            details.removeValue(forKey: id)
+            detailsChanged = true
+        }
         if changed { persist() }
+        if detailsChanged { persistDetails() }
     }
 
     func testAll(
@@ -171,7 +216,7 @@ final class ServerTestRunner: ObservableObject {
         let serverID = server.id
         outcomes[serverID] = .running
         group.addTask { [weak self] in
-            let result = await Self.runProbe(
+            let probe = await Self.runProbe(
                 configJSON: configJSON,
                 resolversText: resolversText,
                 scratchDir: scratchDir,
@@ -179,9 +224,7 @@ final class ServerTestRunner: ObservableObject {
             )
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.outcomes[serverID] = result
-                self.results[serverID] = PersistedResult(outcome: result, at: Date())
-                self.persist()
+                self.applyProbeResult(serverID: serverID, probe: probe)
             }
         }
     }
@@ -207,18 +250,41 @@ final class ServerTestRunner: ObservableObject {
         let serverID = server.id
         outcomes[serverID] = .running
         Task {
-            let result = await Self.runProbe(
+            let probe = await Self.runProbe(
                 configJSON: configJSON,
                 resolversText: resolversText,
                 scratchDir: scratchDir,
                 timeoutMs: timeoutMs
             )
             await MainActor.run {
-                self.outcomes[serverID] = result
-                self.results[serverID] = PersistedResult(outcome: result, at: Date())
-                self.persist()
+                self.applyProbeResult(serverID: serverID, probe: probe)
             }
         }
+    }
+
+    /// Single point where a probe finishes: writes the outcome, persists the
+    /// outcome row, replaces or clears the per-resolver detail rows (the
+    /// detail map intentionally tracks the latest probe even when it fails —
+    /// failure rows are useful drill-down) and triggers both persistence
+    /// stores.
+    private func applyProbeResult(serverID: UUID, probe: ProbeResult) {
+        outcomes[serverID] = probe.outcome
+        results[serverID] = PersistedResult(outcome: probe.outcome, at: Date())
+        if probe.details.isEmpty {
+            details.removeValue(forKey: serverID)
+        } else {
+            details[serverID] = probe.details
+        }
+        persist()
+        persistDetails()
+    }
+
+    /// Output of `runProbe`. Bundles the stable Outcome with whatever
+    /// per-resolver rows the Go binding emitted — empty on failure or when
+    /// running against an older mobile build that lacks `ProbeServerDetailed`.
+    private struct ProbeResult {
+        let outcome: Outcome
+        let details: [ResolverProbeRow]
     }
 
     /// Detached probe: gomobile's call is synchronous, so we hand it to a
@@ -228,30 +294,36 @@ final class ServerTestRunner: ObservableObject {
         resolversText: String,
         scratchDir: String,
         timeoutMs: Int
-    ) async -> Outcome {
+    ) async -> ProbeResult {
         guard let configJSON, !configJSON.isEmpty else {
-            return .fail(reason: "config")
+            return ProbeResult(outcome: .fail(reason: "config"), details: [])
         }
-        return await Task.detached(priority: .userInitiated) { () -> Outcome in
-            // gomobile bound this free function in its raw out-param form
-            // (Bool return + Int64*/NSError* out-params) rather than as a
-            // throwing wrapper. Both forms exist for methods on classes, but
-            // for package-level funcs with (int64, error) return only the
-            // raw form is generated — call it positionally.
+        return await Task.detached(priority: .userInitiated) { () -> ProbeResult in
+            // ProbeServerDetailed has signature (int64, string, error) —
+            // gomobile emits the raw out-param form for free funcs with more
+            // than one non-error return, so we pass two out-params.
             var ms: Int64 = 0
+            var detailsCSV: NSString?
             var nsError: NSError?
-            let ok = DNSpireMobileProbeServer(
+            let ok = DNSpireMobileProbeServerDetailed(
                 configJSON, resolversText, scratchDir, timeoutMs,
-                &ms, &nsError
+                &ms, &detailsCSV, &nsError
             )
+            let rows = Self.parseDetails(detailsCSV as String? ?? "")
             if ok {
-                return .ok(ms: Int(ms))
+                return ProbeResult(outcome: .ok(ms: Int(ms)), details: rows)
             }
             if let nsError {
-                return Self.categorize(nsError)
+                return ProbeResult(outcome: Self.categorize(nsError), details: rows)
             }
-            return .fail(reason: "error")
+            return ProbeResult(outcome: .fail(reason: "error"), details: rows)
         }.value
+    }
+
+    nonisolated private static func parseDetails(_ csv: String) -> [ResolverProbeRow] {
+        guard !csv.isEmpty else { return [] }
+        return csv.split(separator: ";", omittingEmptySubsequences: true)
+            .compactMap(ResolverProbeRow.init(field:))
     }
 
     nonisolated private static func categorize(_ error: Error) -> Outcome {
@@ -285,6 +357,31 @@ final class ServerTestRunner: ObservableObject {
     private func persist() {
         let payload = Self.encode(results)
         UserDefaults.standard.set(payload, forKey: Self.persistKey)
+    }
+
+    private func persistDetails() {
+        let payload = Self.encodeDetails(details)
+        UserDefaults.standard.set(payload, forKey: Self.detailsKey)
+    }
+
+    private static func loadDetails() -> [UUID: [ResolverProbeRow]] {
+        guard let data = UserDefaults.standard.data(forKey: detailsKey),
+              let decoded = try? JSONDecoder().decode([PersistedDetailRow].self, from: data) else {
+            return [:]
+        }
+        var out: [UUID: [ResolverProbeRow]] = [:]
+        for row in decoded { out[row.id] = row.rows }
+        return out
+    }
+
+    private static func encodeDetails(_ details: [UUID: [ResolverProbeRow]]) -> Data {
+        let rows = details.map { PersistedDetailRow(id: $0.key, rows: $0.value) }
+        return (try? JSONEncoder().encode(rows)) ?? Data()
+    }
+
+    private struct PersistedDetailRow: Codable {
+        let id: UUID
+        let rows: [ResolverProbeRow]
     }
 
     private static func loadPersisted() -> [UUID: PersistedResult] {

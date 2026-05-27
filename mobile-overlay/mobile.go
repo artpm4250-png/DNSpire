@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -641,6 +642,112 @@ func ProbeServer(configJSON, resolversText, scratchDir string, timeoutMs int) (i
 	}
 
 	return time.Since(start).Milliseconds(), nil
+}
+
+// ProbeServerDetailed mirrors ProbeServer but additionally returns a
+// `;`-separated per-resolver detail string for the connections the balancer
+// settled on during the probe. Each row is `resolver|valid|mtuResolveMs`,
+// where `valid` is "1" or "0" and `mtuResolveMs` is the duration the
+// upstream balancer recorded for that connection's MTU bisect.
+//
+// The summary string is empty on failure (so the Swift side can fall back to
+// the plain elapsed-ms outcome) and on success when the balancer reports no
+// connections (defensive — should not happen after a successful handshake).
+//
+// Keeping the two probe entry points separate (rather than overloading
+// ProbeServer with an extra out-param) preserves call-site compatibility
+// with the per-row "Test" affordance and lets the bulk "Test all" pass adopt
+// drill-down lazily.
+func ProbeServerDetailed(configJSON, resolversText, scratchDir string, timeoutMs int) (int64, string, error) {
+	if scratchDir == "" {
+		return 0, "", errors.New("config:scratchDir is required")
+	}
+	if err := os.MkdirAll(scratchDir, 0o755); err != nil {
+		return 0, "", fmt.Errorf("config:scratchDir: %w", err)
+	}
+	defer os.RemoveAll(scratchDir)
+
+	resolverPath := ""
+	if resolversText != "" {
+		resolverPath = filepath.Join(scratchDir, "client_resolvers.txt")
+		if err := os.WriteFile(resolverPath, []byte(resolversText), 0o644); err != nil {
+			return 0, "", fmt.Errorf("config:write resolvers: %w", err)
+		}
+	}
+
+	cfg, err := loadConfigFromJSON(configJSON, resolverPath)
+	if err != nil {
+		return 0, "", fmt.Errorf("config:%s", err.Error())
+	}
+	cfg.LogLevel = "ERROR"
+
+	if timeoutMs <= 0 {
+		timeoutMs = 20_000
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+
+	app, err := client.BootstrapLoadedConfig(cfg, "")
+	if err != nil {
+		return 0, "", fmt.Errorf("config:%s", err.Error())
+	}
+
+	if err := app.RunInitialMTUTests(ctx); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return 0, "", errors.New("timeout")
+		}
+		if errors.Is(err, client.ErrNoValidConnections) {
+			return 0, "", errors.New("mtu")
+		}
+		return 0, "", fmt.Errorf("mtu:%s", err.Error())
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return 0, "", errors.New("timeout")
+	}
+
+	if err := app.InitializeSession(1); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return 0, "", errors.New("timeout")
+		}
+		if errors.Is(err, client.ErrNoValidConnections) {
+			return 0, "", errors.New("mtu")
+		}
+		return 0, "", errors.New("handshake")
+	}
+
+	ms := time.Since(start).Milliseconds()
+
+	// Collect per-connection rows from the balancer after MTU bisect. The
+	// balancer may report multiple connections per resolver (one per server
+	// domain) — we keep them split so the UI can highlight the resolver
+	// where every domain failed vs the one where one domain succeeded.
+	details := ""
+	if b := app.Balancer(); b != nil {
+		conns := b.AllConnections()
+		var sb strings.Builder
+		for i, c := range conns {
+			label := c.Resolver
+			if c.ResolverPort != 0 {
+				label = fmt.Sprintf("%s:%d", c.Resolver, c.ResolverPort)
+			}
+			label = strings.ReplaceAll(label, "|", "_")
+			label = strings.ReplaceAll(label, ";", ",")
+			valid := "0"
+			if c.IsValid {
+				valid = "1"
+			}
+			mtuMs := c.MTUResolveTime.Milliseconds()
+			if i > 0 {
+				sb.WriteByte(';')
+			}
+			fmt.Fprintf(&sb, "%s|%s|%d", label, valid, mtuMs)
+		}
+		details = sb.String()
+	}
+
+	return ms, details, nil
 }
 
 // Version returns the mobile-binding version tag. Independent of the upstream
