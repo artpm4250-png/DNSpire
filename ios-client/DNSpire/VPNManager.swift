@@ -216,29 +216,28 @@ final class VPNManager: ObservableObject {
             noteIPCMiss(reason: "failed to encode snapshot request")
             return
         }
-        let result: Result<ProviderSnapshot, String> = await withCheckedContinuation { cont in
+        let outcome: (snapshot: ProviderSnapshot?, reason: String) = await withCheckedContinuation { cont in
             do {
                 try session.sendProviderMessage(body) { data in
                     guard let data else {
-                        cont.resume(returning: .failure("provider returned nil"))
+                        cont.resume(returning: (nil, "provider returned nil"))
                         return
                     }
                     do {
                         let decoded = try JSONDecoder().decode(ProviderSnapshot.self, from: data)
-                        cont.resume(returning: .success(decoded))
+                        cont.resume(returning: (decoded, ""))
                     } catch {
-                        cont.resume(returning: .failure("decode failed: \(error.localizedDescription)"))
+                        cont.resume(returning: (nil, "decode failed: \(error.localizedDescription)"))
                     }
                 }
             } catch {
-                cont.resume(returning: .failure("sendProviderMessage threw: \(error.localizedDescription)"))
+                cont.resume(returning: (nil, "sendProviderMessage threw: \(error.localizedDescription)"))
             }
         }
-        switch result {
-        case .success(let snapshot):
+        if let snapshot = outcome.snapshot {
             apply(snapshot)
-        case .failure(let reason):
-            noteIPCMiss(reason: reason)
+        } else {
+            noteIPCMiss(reason: outcome.reason)
         }
     }
 
