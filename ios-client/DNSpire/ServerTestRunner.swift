@@ -299,25 +299,38 @@ final class ServerTestRunner: ObservableObject {
             return ProbeResult(outcome: .fail(reason: "config"), details: [])
         }
         return await Task.detached(priority: .userInitiated) { () -> ProbeResult in
-            // ProbeServerDetailed has signature (int64, string, error) —
-            // gomobile emits the raw out-param form for free funcs with more
-            // than one non-error return, so we pass two out-params.
-            var ms: Int64 = 0
-            var detailsCSV: NSString?
+            // ProbeServerDetailed has signature (string, error). gomobile only
+            // binds the (value, error) shape, so the Go side packs elapsed-ms
+            // and the per-resolver CSV into a single string `"<ms>\n<rows>"`.
             var nsError: NSError?
-            let ok = DNSpireMobileProbeServerDetailed(
+            let packed = DNSpireMobileProbeServerDetailed(
                 configJSON, resolversText, scratchDir, timeoutMs,
-                &ms, &detailsCSV, &nsError
+                &nsError
             )
-            let rows = Self.parseDetails(detailsCSV as String? ?? "")
-            if ok {
-                return ProbeResult(outcome: .ok(ms: Int(ms)), details: rows)
-            }
+            let (msOpt, rowsCSV) = Self.unpackProbe(packed as String? ?? "")
+            let rows = Self.parseDetails(rowsCSV)
             if let nsError {
                 return ProbeResult(outcome: Self.categorize(nsError), details: rows)
             }
+            if let ms = msOpt {
+                return ProbeResult(outcome: .ok(ms: ms), details: rows)
+            }
             return ProbeResult(outcome: .fail(reason: "error"), details: rows)
         }.value
+    }
+
+    /// Unpack the `"<ms>\n<rows>"` envelope ProbeServerDetailed returns.
+    /// Returns nil for ms if the first line isn't a non-negative integer —
+    /// caller treats that as a hard failure regardless of what came back in
+    /// the rows segment.
+    nonisolated private static func unpackProbe(_ s: String) -> (Int?, String) {
+        guard !s.isEmpty else { return (nil, "") }
+        if let nl = s.firstIndex(of: "\n") {
+            let head = s[..<nl]
+            let tail = s[s.index(after: nl)...]
+            return (Int(head), String(tail))
+        }
+        return (Int(s), "")
     }
 
     nonisolated private static func parseDetails(_ csv: String) -> [ResolverProbeRow] {

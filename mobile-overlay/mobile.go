@@ -650,20 +650,22 @@ func ProbeServer(configJSON, resolversText, scratchDir string, timeoutMs int) (i
 // where `valid` is "1" or "0" and `mtuResolveMs` is the duration the
 // upstream balancer recorded for that connection's MTU bisect.
 //
-// The summary string is empty on failure (so the Swift side can fall back to
-// the plain elapsed-ms outcome) and on success when the balancer reports no
-// connections (defensive — should not happen after a successful handshake).
+// gomobile only binds funcs with `(value, error)` or `(error)` return shape,
+// so the elapsed-ms and detail rows are packed into a single string
+// `"<ms>\n<rows>"`. On success: ms is a non-negative integer and rows is the
+// `;`-separated CSV (possibly empty). On failure: ms is "0" and rows is
+// empty — callers should look at the returned error instead.
 //
 // Keeping the two probe entry points separate (rather than overloading
 // ProbeServer with an extra out-param) preserves call-site compatibility
 // with the per-row "Test" affordance and lets the bulk "Test all" pass adopt
 // drill-down lazily.
-func ProbeServerDetailed(configJSON, resolversText, scratchDir string, timeoutMs int) (int64, string, error) {
+func ProbeServerDetailed(configJSON, resolversText, scratchDir string, timeoutMs int) (string, error) {
 	if scratchDir == "" {
-		return 0, "", errors.New("config:scratchDir is required")
+		return "", errors.New("config:scratchDir is required")
 	}
 	if err := os.MkdirAll(scratchDir, 0o755); err != nil {
-		return 0, "", fmt.Errorf("config:scratchDir: %w", err)
+		return "", fmt.Errorf("config:scratchDir: %w", err)
 	}
 	defer os.RemoveAll(scratchDir)
 
@@ -671,13 +673,13 @@ func ProbeServerDetailed(configJSON, resolversText, scratchDir string, timeoutMs
 	if resolversText != "" {
 		resolverPath = filepath.Join(scratchDir, "client_resolvers.txt")
 		if err := os.WriteFile(resolverPath, []byte(resolversText), 0o644); err != nil {
-			return 0, "", fmt.Errorf("config:write resolvers: %w", err)
+			return "", fmt.Errorf("config:write resolvers: %w", err)
 		}
 	}
 
 	cfg, err := loadConfigFromJSON(configJSON, resolverPath)
 	if err != nil {
-		return 0, "", fmt.Errorf("config:%s", err.Error())
+		return "", fmt.Errorf("config:%s", err.Error())
 	}
 	cfg.LogLevel = "ERROR"
 
@@ -691,30 +693,30 @@ func ProbeServerDetailed(configJSON, resolversText, scratchDir string, timeoutMs
 
 	app, err := client.BootstrapLoadedConfig(cfg, "")
 	if err != nil {
-		return 0, "", fmt.Errorf("config:%s", err.Error())
+		return "", fmt.Errorf("config:%s", err.Error())
 	}
 
 	if err := app.RunInitialMTUTests(ctx); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return 0, "", errors.New("timeout")
+			return "", errors.New("timeout")
 		}
 		if errors.Is(err, client.ErrNoValidConnections) {
-			return 0, "", errors.New("mtu")
+			return "", errors.New("mtu")
 		}
-		return 0, "", fmt.Errorf("mtu:%s", err.Error())
+		return "", fmt.Errorf("mtu:%s", err.Error())
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		return 0, "", errors.New("timeout")
+		return "", errors.New("timeout")
 	}
 
 	if err := app.InitializeSession(1); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return 0, "", errors.New("timeout")
+			return "", errors.New("timeout")
 		}
 		if errors.Is(err, client.ErrNoValidConnections) {
-			return 0, "", errors.New("mtu")
+			return "", errors.New("mtu")
 		}
-		return 0, "", errors.New("handshake")
+		return "", errors.New("handshake")
 	}
 
 	ms := time.Since(start).Milliseconds()
@@ -747,7 +749,7 @@ func ProbeServerDetailed(configJSON, resolversText, scratchDir string, timeoutMs
 		details = sb.String()
 	}
 
-	return ms, details, nil
+	return fmt.Sprintf("%d\n%s", ms, details), nil
 }
 
 // ProbeResolvers sends a small DNS A-query to each `addr` in the list and
