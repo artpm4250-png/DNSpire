@@ -55,6 +55,13 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         ITSAppUsesNonExemptEncryption: false
+        # Handle stormdns:// profile links system-wide (Safari / Messages /
+        # Notes). Tapping one opens DNSpire and imports the server profile via
+        # .onOpenURL in DNSpireApp. Wire-compatible with the WhiteDNS client.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.dnspire.ios.stormdns
+            CFBundleURLSchemes:
+              - stormdns
         # Keep the SOCKS5 listener alive while the user switches to Happ /
         # Shadowrocket. Without a background mode iOS suspends DNSpire ~30s
         # after backgrounding and the listener dies. BackgroundAudioKeeper

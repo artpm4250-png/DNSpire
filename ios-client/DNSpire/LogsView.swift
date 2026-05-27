@@ -299,7 +299,7 @@ private struct ExportFile: Identifiable {
     var id: String { url.path }
 }
 
-private struct ShareSheet: UIViewControllerRepresentable {
+struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
 
     func makeUIViewController(context: Context) -> UIActivityViewController {

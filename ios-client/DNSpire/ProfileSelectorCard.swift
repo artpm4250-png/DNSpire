@@ -112,6 +112,13 @@ struct ProfileSliceSheet: View {
     @State private var pendingSwitch: PendingSwitch?
     @State private var renamingID: UUID?
     @State private var renameText: String = ""
+    @State private var shareLink: ShareLinkItem?
+    @State private var importing = false
+
+    private struct ShareLinkItem: Identifiable {
+        let id = UUID()
+        let url: String
+    }
 
     var body: some View {
         NavigationStack {
@@ -132,6 +139,19 @@ struct ProfileSliceSheet: View {
                         renameText = activeName
                     } label: {
                         Label("Rename active", systemImage: "pencil")
+                    }
+                    if slice == .server {
+                        Button {
+                            exportActiveServer()
+                        } label: {
+                            Label("Share as link", systemImage: "square.and.arrow.up")
+                        }
+                        .disabled(!canExportActiveServer)
+                        Button {
+                            importing = true
+                        } label: {
+                            Label("Import from link…", systemImage: "square.and.arrow.down")
+                        }
                     }
                 }
             }
@@ -170,6 +190,13 @@ struct ProfileSliceSheet: View {
                 TextField("Name", text: $renameText)
                 Button("Save") { performRename() }
                 Button("Cancel", role: .cancel) { renamingID = nil }
+            }
+            .sheet(isPresented: $importing) {
+                StormDNSImportSheet()
+                    .environmentObject(profileStore)
+            }
+            .sheet(item: $shareLink) { item in
+                ShareSheet(items: [item.url])
             }
         }
     }
@@ -227,6 +254,27 @@ struct ProfileSliceSheet: View {
         case .resolver: profileStore.setActiveResolver(id, applying: &configStore.draft)
         case .tuning:   profileStore.setActiveTuning(id, applying: &configStore.draft)
         }
+    }
+
+    private var canExportActiveServer: Bool {
+        StormDNSProfileLink.encode(
+            name: profileStore.activeServer.name,
+            domain: profileStore.activeServer.domains.first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? "",
+            encryptionKey: profileStore.activeServer.encryptionKey,
+            encryptionMethod: profileStore.activeServer.dataEncryptionMethod
+        ) != nil
+    }
+
+    private func exportActiveServer() {
+        let s = profileStore.activeServer
+        let domain = s.domains.first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
+        guard let link = StormDNSProfileLink.encode(
+            name: s.name,
+            domain: domain,
+            encryptionKey: s.encryptionKey,
+            encryptionMethod: s.dataEncryptionMethod
+        ) else { return }
+        shareLink = ShareLinkItem(url: link)
     }
 
     private func duplicateActive() {
@@ -330,6 +378,91 @@ struct SaveToProfileButton: View {
         }
         if div.tuning && saveTuning {
             profileStore.overwriteActiveTuning(from: configStore.draft)
+        }
+    }
+}
+
+// MARK: - stormdns:// import
+
+/// Paste-area sheet for importing one or more `stormdns://` server links.
+/// Each valid line becomes a new (non-active) server profile via
+/// [[ProfileStore.captureServerAsNew]]; invalid lines are listed with reasons.
+struct StormDNSImportSheet: View {
+    @EnvironmentObject var profileStore: ProfileStore
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var text = ""
+    @State private var result: ImportResult?
+
+    private struct ImportResult {
+        let importedNames: [String]
+        let failures: [String]
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextEditor(text: $text)
+                        .frame(minHeight: 120)
+                        .font(.system(.footnote, design: .monospaced))
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                } header: {
+                    Text("Paste one or more stormdns:// links")
+                } footer: {
+                    Text("Each line is imported as a separate server profile.")
+                }
+
+                if let result {
+                    Section("Result") {
+                        if !result.importedNames.isEmpty {
+                            Label("Imported \(result.importedNames.count)", systemImage: "checkmark.circle")
+                                .foregroundStyle(.green)
+                            ForEach(result.importedNames, id: \.self) { name in
+                                Text(name).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        ForEach(result.failures, id: \.self) { failure in
+                            Label(failure, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Import server")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Import") { performImport() }
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func performImport() {
+        let parsed = StormDNSProfileLink.decodeMany(text)
+        var names: [String] = []
+        for item in parsed.ok {
+            var draft = ClientConfigDraft.default
+            draft.domains = [item.domain]
+            draft.encryptionKey = item.encryptionKey
+            draft.dataEncryptionMethod = item.encryptionMethod
+            profileStore.captureServerAsNew(from: draft, name: item.name)
+            names.append(item.name)
+        }
+        let failures = parsed.failed.map { f in
+            "Line \(f.line): \((f.error as? StormDNSProfileLink.DecodeError)?.errorDescription ?? f.error.localizedDescription)"
+        }
+        if names.isEmpty && failures.isEmpty {
+            result = ImportResult(importedNames: [], failures: ["No valid links found"])
+        } else {
+            result = ImportResult(importedNames: names, failures: failures)
         }
     }
 }
