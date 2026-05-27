@@ -107,7 +107,7 @@ struct ConnectionView: View {
 
     private var canConnect: Bool {
         !configStore.draft.encryptionKey.isEmpty &&
-        !configStore.draft.domains.allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty } &&
+        !configStore.draft.domains.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } &&
         !configStore.encodedResolversText().isEmpty
     }
 
@@ -137,7 +137,7 @@ struct ConnectionView: View {
             out.append("Encryption key")
         }
         let hasDomain = !configStore.draft.domains.allSatisfy {
-            $0.trimmingCharacters(in: .whitespaces).isEmpty
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         if !hasDomain { out.append("At least one domain") }
         if configStore.encodedResolversText().isEmpty {
@@ -169,11 +169,17 @@ struct ConnectionView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color(.tertiarySystemFill))
             )
-            Text(isAnyTunnelBusy ? "Disconnect to switch modes." : mode.subtitle)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity, alignment: .center)
+            HStack(spacing: 4) {
+                if isAnyTunnelBusy {
+                    Image(systemName: "lock.fill")
+                        .font(.caption2)
+                }
+                Text(isAnyTunnelBusy ? "Disconnect to switch modes." : mode.subtitle)
+                    .font(.caption2)
+            }
+            .foregroundStyle(isAnyTunnelBusy ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
         .padding(.top, 12)
     }
@@ -273,15 +279,33 @@ private struct StatusBadge: View {
                 )
                 .overlay(
                     Circle().stroke(color.opacity(0.3), lineWidth: 6)
-                        .scaleEffect(isProxyReady ? 1.2 : 1.0)
-                        .opacity(isProxyReady ? 0.0 : 0.6)
-                        .animation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true),
-                                   value: isProxyReady)
+                        .scaleEffect(isInFlight ? 1.25 : 1.0)
+                        .opacity(isInFlight ? 0.0 : 0.6)
+                        .animation(
+                            isInFlight
+                                ? .easeInOut(duration: 1.2).repeatForever(autoreverses: true)
+                                : .default,
+                            value: isInFlight
+                        )
                 )
             Text(label).font(.headline)
             if !detail.isEmpty {
                 Text(detail).font(.caption).foregroundStyle(.secondary)
             }
+        }
+    }
+
+    /// Pulse the ring only while the proxy is mid-handshake. Mirrors
+    /// [[VPNBadge.isInFlight]] semantics — steady ring once `isProxyReady`
+    /// flips true, steady ring at `.stopped` / `.error`.
+    private var isInFlight: Bool {
+        switch status {
+        case .starting, .mtuTesting, .sessionInit, .reconnecting:
+            return !isProxyReady
+        case .connected:
+            return !isProxyReady
+        case .stopped, .error:
+            return false
         }
     }
 
@@ -624,10 +648,13 @@ private struct LiveTunnelCard: View {
 
             Divider()
 
+            // Resolver counts intentionally omitted here — the
+            // ResolverStatePane below breaks the same numbers down into
+            // active / inactive / pending chips, so duplicating them as a
+            // mini-stat is just noise.
             HStack(spacing: 0) {
                 miniStat(label: "TCP", value: "\(stats.tcpFlowsActive)", sub: "of \(stats.tcpFlowsAccepted)")
                 miniStat(label: "DNS", value: "\(stats.dnsQueriesHandled)", sub: "queries")
-                miniStat(label: "Resolvers", value: "\(stats.resolversActive)", sub: "of \(stats.resolversTotal)")
             }
 
             if let mtu = stats.mtu {
@@ -844,8 +871,9 @@ private struct MissingFieldsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .foregroundStyle(.orange)
+                Circle()
+                    .fill(Color.orange)
+                    .frame(width: 6, height: 6)
                 Text("Configuration needed")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
@@ -858,14 +886,14 @@ private struct MissingFieldsCard: View {
                     HStack(spacing: 8) {
                         Image(systemName: "circle.fill")
                             .font(.system(size: 4))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(.secondary)
                         Text(item).font(.caption)
                     }
                 }
             }
         }
         .padding(14)
-        .background(Color.orange.opacity(0.10))
+        .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }

@@ -79,7 +79,7 @@ struct DNSpireApp: App {
         guard best.id != profileStore.activeServerID else { return }
         let name = profileStore.servers.first { $0.id == best.id }?.name ?? "?"
         profileStore.setActiveServer(best.id, applying: &configStore.draft)
-        logStore.append("[auto] picked fastest server '\(name)' (\(best.ms) ms)")
+        logStore.append("[ui] auto: picked fastest server '\(name)' (\(best.ms) ms)")
     }
 
     private func handleIncoming(_ url: URL) {
