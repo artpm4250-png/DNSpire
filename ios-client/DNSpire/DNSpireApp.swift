@@ -7,6 +7,7 @@ struct DNSpireApp: App {
     @StateObject private var tunnel = TunnelController()
     @StateObject private var logStore = LogStore()
     @StateObject private var vpn = VPNManager()
+    @StateObject private var testRunner = ServerTestRunner()
 
     @State private var importAlert: ImportAlert?
 
@@ -24,9 +25,11 @@ struct DNSpireApp: App {
                 .environmentObject(tunnel)
                 .environmentObject(logStore)
                 .environmentObject(vpn)
+                .environmentObject(testRunner)
                 .task {
                     tunnel.attach(logStore: logStore)
                     vpn.attach(logStore: logStore)
+                    testRunner.prune(to: Set(profileStore.servers.map(\.id)))
                 }
                 .onOpenURL { url in
                     handleIncoming(url)

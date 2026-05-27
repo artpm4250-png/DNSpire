@@ -10,6 +10,12 @@ import DNSpireCore
 /// (`BootstrapLoadedConfig` → `RunInitialMTUTests` → `InitializeSession`) that
 /// tears itself down and never binds the SOCKS5 listener, so probes are safe
 /// to run in parallel and concurrently with a live tunnel.
+///
+/// The runner is a long-lived `@EnvironmentObject` (see `DNSpireApp`) so that
+/// outcomes survive sheet dismissals. Stable outcomes (`ok` / `timeout` /
+/// `fail`) are persisted to `UserDefaults` together with the wall-clock
+/// timestamp when the probe finished, so `Test all` results stay visible
+/// across app launches until the user re-runs them.
 @MainActor
 final class ServerTestRunner: ObservableObject {
     enum Outcome: Equatable {
@@ -23,7 +29,16 @@ final class ServerTestRunner: ObservableObject {
         case fail(reason: String)
     }
 
+    /// One persisted result for a server. `pending` and `running` are
+    /// transient and never written to disk, so the stored outcome is always
+    /// one of `ok` / `timeout` / `fail`.
+    struct PersistedResult: Equatable {
+        let outcome: Outcome
+        let at: Date
+    }
+
     @Published private(set) var outcomes: [UUID: Outcome] = [:]
+    @Published private(set) var results: [UUID: PersistedResult] = [:]
     @Published private(set) var isRunning = false
 
     /// Total wall-clock budget per server probe. `nonisolated` so it can be
@@ -37,8 +52,29 @@ final class ServerTestRunner: ObservableObject {
     /// to look like a flood.
     nonisolated static let maxParallel = 4
 
+    private static let persistKey = "DNSpire.ServerTestRunner.results.v1"
+
+    init() {
+        results = Self.loadPersisted()
+        outcomes = results.mapValues { $0.outcome }
+    }
+
     func reset() {
         outcomes = [:]
+        results = [:]
+        UserDefaults.standard.removeObject(forKey: Self.persistKey)
+    }
+
+    /// Drop any persisted result whose server is no longer present in the
+    /// active profile list. Called when the user deletes a server profile.
+    func prune(to liveServerIDs: Set<UUID>) {
+        var changed = false
+        for id in results.keys where !liveServerIDs.contains(id) {
+            results.removeValue(forKey: id)
+            outcomes.removeValue(forKey: id)
+            changed = true
+        }
+        if changed { persist() }
     }
 
     func testAll(
@@ -107,7 +143,10 @@ final class ServerTestRunner: ObservableObject {
                 timeoutMs: timeoutMs
             )
             await MainActor.run { [weak self] in
-                self?.outcomes[serverID] = result
+                guard let self else { return }
+                self.outcomes[serverID] = result
+                self.results[serverID] = PersistedResult(outcome: result, at: Date())
+                self.persist()
             }
         }
     }
@@ -169,5 +208,95 @@ final class ServerTestRunner: ObservableObject {
         let dir = base.appendingPathComponent("dnspire-probe", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    // MARK: - Persistence
+
+    private func persist() {
+        let payload = Self.encode(results)
+        UserDefaults.standard.set(payload, forKey: Self.persistKey)
+    }
+
+    private static func loadPersisted() -> [UUID: PersistedResult] {
+        guard let data = UserDefaults.standard.data(forKey: persistKey),
+              let raw = try? JSONDecoder().decode([PersistedRow].self, from: data) else {
+            return [:]
+        }
+        var out: [UUID: PersistedResult] = [:]
+        for row in raw {
+            guard let outcome = row.toOutcome() else { continue }
+            out[row.id] = PersistedResult(
+                outcome: outcome,
+                at: Date(timeIntervalSince1970: row.atUnix)
+            )
+        }
+        return out
+    }
+
+    private static func encode(_ results: [UUID: PersistedResult]) -> Data {
+        let rows = results.map { (id, value) -> PersistedRow in
+            PersistedRow.from(id: id, result: value)
+        }
+        return (try? JSONEncoder().encode(rows)) ?? Data()
+    }
+
+    /// On-disk row format. Kept flat and explicit so future Outcome cases
+    /// land in `unknown` instead of crashing the decode for older buffers.
+    private struct PersistedRow: Codable {
+        let id: UUID
+        let kind: String     // "ok" | "timeout" | "fail"
+        let ms: Int?         // populated when kind == "ok"
+        let reason: String?  // populated when kind == "fail"
+        let atUnix: TimeInterval
+
+        static func from(id: UUID, result: PersistedResult) -> PersistedRow {
+            switch result.outcome {
+            case .ok(let ms):
+                return PersistedRow(id: id, kind: "ok", ms: ms, reason: nil,
+                                    atUnix: result.at.timeIntervalSince1970)
+            case .timeout:
+                return PersistedRow(id: id, kind: "timeout", ms: nil, reason: nil,
+                                    atUnix: result.at.timeIntervalSince1970)
+            case .fail(let reason):
+                return PersistedRow(id: id, kind: "fail", ms: nil, reason: reason,
+                                    atUnix: result.at.timeIntervalSince1970)
+            case .pending, .running:
+                // Should never hit disk — guard at the caller. If it ever
+                // does, drop the row by returning a recognisable sentinel.
+                return PersistedRow(id: id, kind: "fail", ms: nil, reason: "stale",
+                                    atUnix: result.at.timeIntervalSince1970)
+            }
+        }
+
+        func toOutcome() -> Outcome? {
+            switch kind {
+            case "ok":
+                guard let ms else { return nil }
+                return .ok(ms: ms)
+            case "timeout":
+                return .timeout
+            case "fail":
+                return .fail(reason: reason ?? "error")
+            default:
+                return nil
+            }
+        }
+    }
+}
+
+extension ServerTestRunner.Outcome {
+    /// Coarse latency band, derived from `ok(ms)`. Other outcomes return nil
+    /// — callers should render a separate "timeout" / "fail" badge for those.
+    /// Thresholds picked to match the typical DNS-tunnel latency floor and
+    /// the point at which a connection starts to feel sluggish on iOS.
+    enum Score {
+        case good, fair, poor
+    }
+
+    var score: Score? {
+        guard case .ok(let ms) = self else { return nil }
+        if ms < 200 { return .good }
+        if ms < 600 { return .fair }
+        return .poor
     }
 }

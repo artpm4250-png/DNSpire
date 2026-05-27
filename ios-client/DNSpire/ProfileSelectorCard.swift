@@ -135,6 +135,7 @@ struct ProfileSliceSheet: View {
 
     @EnvironmentObject var configStore: ConfigStore
     @EnvironmentObject var profileStore: ProfileStore
+    @EnvironmentObject var testRunner: ServerTestRunner
     @Environment(\.dismiss) private var dismiss
 
     private struct PendingSwitch: Identifiable {
@@ -147,7 +148,6 @@ struct ProfileSliceSheet: View {
     @State private var renameText: String = ""
     @State private var shareLink: ShareLinkItem?
     @State private var importing = false
-    @StateObject private var testRunner = ServerTestRunner()
 
     private struct ShareLinkItem: Identifiable {
         let id = UUID()
@@ -294,8 +294,8 @@ struct ProfileSliceSheet: View {
                     .foregroundStyle(.primary)
                     .fontWeight(isActive ? .semibold : .regular)
                 Spacer()
-                if slice == .server, let outcome = testRunner.outcomes[id] {
-                    outcomeBadge(outcome)
+                if slice == .server {
+                    serverBadge(for: id)
                 }
             }
             .contentShape(Rectangle())
@@ -303,8 +303,20 @@ struct ProfileSliceSheet: View {
         .buttonStyle(.plain)
     }
 
+    /// Prefer the transient `outcomes` map (covers `.pending` / `.running`
+    /// during a probe pass) and fall back to the persisted `results` so
+    /// previous-run scores stay visible across sheet dismissals and launches.
     @ViewBuilder
-    private func outcomeBadge(_ outcome: ServerTestRunner.Outcome) -> some View {
+    private func serverBadge(for id: UUID) -> some View {
+        if let live = testRunner.outcomes[id] {
+            outcomeBadge(live, persistedAt: testRunner.results[id]?.at)
+        } else if let stored = testRunner.results[id] {
+            outcomeBadge(stored.outcome, persistedAt: stored.at)
+        }
+    }
+
+    @ViewBuilder
+    private func outcomeBadge(_ outcome: ServerTestRunner.Outcome, persistedAt: Date?) -> some View {
         switch outcome {
         case .pending:
             Circle()
@@ -314,13 +326,20 @@ struct ProfileSliceSheet: View {
             ProgressView()
                 .controlSize(.mini)
         case .ok(let ms):
-            Text("\(ms) ms")
-                .font(.caption.monospacedDigit())
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.green.opacity(0.15))
-                .foregroundStyle(.green)
-                .clipShape(Capsule())
+            HStack(spacing: 6) {
+                if let persistedAt {
+                    Text(Self.relativeAge(persistedAt))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+                Text("\(ms) ms")
+                    .font(.caption.monospacedDigit())
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(scoreTint(outcome.score).opacity(0.15))
+                    .foregroundStyle(scoreTint(outcome.score))
+                    .clipShape(Capsule())
+            }
         case .timeout:
             Text("timeout")
                 .font(.caption)
@@ -338,6 +357,25 @@ struct ProfileSliceSheet: View {
                 .foregroundStyle(.red)
                 .clipShape(Capsule())
         }
+    }
+
+    private func scoreTint(_ score: ServerTestRunner.Outcome.Score?) -> Color {
+        switch score {
+        case .good: return .green
+        case .fair: return .orange
+        case .poor: return .red
+        case nil:   return .secondary
+        }
+    }
+
+    /// Compact "12s" / "4m" / "2h" / "3d" age — fits in the row without
+    /// wrapping. We don't need full DateComponentsFormatter overhead here.
+    private static func relativeAge(_ at: Date) -> String {
+        let secs = max(0, Int(Date().timeIntervalSince(at)))
+        if secs < 60   { return "\(secs)s" }
+        if secs < 3600 { return "\(secs / 60)m" }
+        if secs < 86_400 { return "\(secs / 3600)h" }
+        return "\(secs / 86_400)d"
     }
 
     private func performSwitch(to id: UUID) {
