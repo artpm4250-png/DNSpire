@@ -249,6 +249,10 @@ struct ProfileSliceSheet: View {
                 Section {
                     ForEach(items, id: \.id) { item in
                         row(id: item.id, name: item.name)
+                            .modifier(ServerRowProbeActions(
+                                slice: slice,
+                                onProbe: { probeOne(id: item.id) }
+                            ))
                     }
                 }
                 Section {
@@ -473,6 +477,12 @@ struct ProfileSliceSheet: View {
         case .resolver: profileStore.setActiveResolver(id, applying: &configStore.draft)
         case .tuning:   profileStore.setActiveTuning(id, applying: &configStore.draft)
         }
+    }
+
+    private func probeOne(id: UUID) {
+        guard slice == .server,
+              let server = profileStore.servers.first(where: { $0.id == id }) else { return }
+        testRunner.testOne(server: server, configStore: configStore)
     }
 
     private var canExportActiveServer: Bool {
@@ -720,6 +730,43 @@ struct StormDNSImportSheet: View {
             result = ImportResult(importedNames: [], failures: ["No valid links found"])
         } else {
             result = ImportResult(importedNames: names, failures: failures)
+        }
+    }
+}
+
+// MARK: - Per-row probe affordances
+
+/// Attaches a trailing swipe action and a long-press context menu to a
+/// server-slice row. Renders nothing for resolver/tuning slices — those
+/// don't have a meaningful per-row probe yet.
+///
+/// Lives as a `ViewModifier` rather than chained `.swipeActions` directly on
+/// the row so the slice-kind gate is in one place and the row helper stays
+/// agnostic to which slice it's drawing.
+private struct ServerRowProbeActions: ViewModifier {
+    let slice: ProfileSliceKind
+    let onProbe: () -> Void
+
+    func body(content: Content) -> some View {
+        if slice == .server {
+            content
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button {
+                        onProbe()
+                    } label: {
+                        Label("Test", systemImage: "speedometer")
+                    }
+                    .tint(.accentColor)
+                }
+                .contextMenu {
+                    Button {
+                        onProbe()
+                    } label: {
+                        Label("Test this server", systemImage: "speedometer")
+                    }
+                }
+        } else {
+            content
         }
     }
 }

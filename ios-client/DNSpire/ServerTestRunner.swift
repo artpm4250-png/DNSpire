@@ -186,6 +186,41 @@ final class ServerTestRunner: ObservableObject {
         }
     }
 
+    /// Probe a single server profile out-of-band from `testAll`. Used by the
+    /// per-row "Test" affordance in `ProfileSliceSheet`. Coexists with an
+    /// ongoing `testAll` (the same server's probe just gets coalesced via
+    /// the `.running` guard).
+    ///
+    /// Unlike `testAll`, this does NOT bump `runEpoch` — a fresh single
+    /// result shouldn't reset the user's "I dismissed the suggestion"
+    /// state for the bulk run.
+    func testOne(
+        server: ServerProfile,
+        configStore: ConfigStore,
+        timeoutMs: Int = ServerTestRunner.defaultTimeoutMs
+    ) {
+        if case .running = outcomes[server.id] { return }
+        let configJSON = configStore.encodedConfigJSON(serverOverride: server)
+        let resolversText = configStore.encodedResolversText()
+        let scratchDir = Self.scratchRootURL()
+            .appendingPathComponent(server.id.uuidString, isDirectory: true).path
+        let serverID = server.id
+        outcomes[serverID] = .running
+        Task {
+            let result = await Self.runProbe(
+                configJSON: configJSON,
+                resolversText: resolversText,
+                scratchDir: scratchDir,
+                timeoutMs: timeoutMs
+            )
+            await MainActor.run {
+                self.outcomes[serverID] = result
+                self.results[serverID] = PersistedResult(outcome: result, at: Date())
+                self.persist()
+            }
+        }
+    }
+
     /// Detached probe: gomobile's call is synchronous, so we hand it to a
     /// background thread and only re-enter MainActor to publish the result.
     private static func runProbe(
