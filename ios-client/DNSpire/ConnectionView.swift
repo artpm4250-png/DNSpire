@@ -68,7 +68,7 @@ struct ConnectionView: View {
                     }
 
                     if mode == .systemVPN, vpn.status == .connected || vpn.status == .reasserting {
-                        TrafficCard(stats: vpn.stats)
+                        TrafficCard(stats: vpn.stats, lastSnapshotAt: vpn.lastSnapshotAt)
                     }
 
                     if let err = currentError {
@@ -471,10 +471,19 @@ private struct ErrorCard: View {
 
 private struct TrafficCard: View {
     let stats: VPNStats
+    /// Wall-clock time of the most recent successful IPC snapshot from the
+    /// packet-tunnel extension. Nil between connects. Surfaced in the footer
+    /// so a frozen card immediately distinguishes "IPC dead" from "tunnel up
+    /// but really idle".
+    let lastSnapshotAt: Date?
 
     @State private var prevSample: (stats: VPNStats, at: Date)?
     @State private var upRate: Double = 0
     @State private var downRate: Double = 0
+    /// Heartbeat that re-renders the "Updated Xs ago" footer once per second
+    /// without depending on stats actually changing — the whole point is to
+    /// notice when stats *stop* changing.
+    @State private var now: Date = Date()
 
     private static let totalFormatter: ByteCountFormatter = {
         let f = ByteCountFormatter()
@@ -518,6 +527,16 @@ private struct TrafficCard: View {
             row("Active TCP", "\(stats.tcpFlowsActive)")
             row("Total TCP", "\(stats.tcpFlowsAccepted)")
             row("DNS queries", "\(stats.dnsQueriesHandled)")
+            Divider()
+            HStack(spacing: 6) {
+                Image(systemName: livenessIcon)
+                    .font(.caption2)
+                    .foregroundStyle(livenessColor)
+                Text(livenessText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
         }
         .padding()
         .background(Color(.secondarySystemBackground))
@@ -527,7 +546,37 @@ private struct TrafficCard: View {
         }
         .onAppear {
             prevSample = (stats, Date())
+            now = Date()
         }
+        .task {
+            // Tick once per second so the "Xs ago" footer keeps updating even
+            // when stats are frozen (which is exactly when the user cares most).
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                now = Date()
+            }
+        }
+    }
+
+    private var ageSeconds: Int? {
+        guard let last = lastSnapshotAt else { return nil }
+        return max(0, Int(now.timeIntervalSince(last).rounded()))
+    }
+
+    private var livenessText: String {
+        guard let age = ageSeconds else { return "Waiting for stats…" }
+        if age <= 1 { return "Updated just now" }
+        return "Updated \(age)s ago"
+    }
+
+    private var livenessIcon: String {
+        guard let age = ageSeconds else { return "hourglass" }
+        return age <= 3 ? "dot.radiowaves.left.and.right" : "exclamationmark.triangle"
+    }
+
+    private var livenessColor: Color {
+        guard let age = ageSeconds else { return .secondary }
+        return age <= 3 ? .green : .orange
     }
 
     private func recomputeRate(with new: VPNStats) {

@@ -27,6 +27,11 @@ final class VPNManager: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var goStatus: String = ""
     @Published private(set) var stats: VPNStats = .init()
+    /// Timestamp of the last successfully-decoded snapshot from the packet-tunnel
+    /// extension. Nil between connects. Surfaced in the TrafficCard footer so a
+    /// frozen card immediately tells the user whether IPC is dead or the
+    /// extension is reporting genuine zeros.
+    @Published private(set) var lastSnapshotAt: Date?
     /// True once a NETunnelProviderManager exists in the system preferences
     /// (i.e. the user has approved at least one VPN connect). Drives the
     /// "Remove profile" button visibility.
@@ -40,6 +45,11 @@ final class VPNManager: ObservableObject {
 
     private var pollTask: Task<Void, Never>?
     private var lastLogSeq: Int = 0
+    private var firstSnapshotLogged: Bool = false
+    /// Consecutive `pollOnce` cycles that did not produce a snapshot. Used to
+    /// rate-limit the "[vpn] IPC silent" diagnostic — the poll loop fires once
+    /// per second so we only log every 10th miss to avoid flooding.
+    private var ipcMissStreak: Int = 0
 
     init() {
         Task { await reloadManager() }
@@ -98,6 +108,9 @@ final class VPNManager: ObservableObject {
             self.observeStatusChanges(mgr)
             self.lastLogSeq = 0
             self.stats = .init()
+            self.lastSnapshotAt = nil
+            self.firstSnapshotLogged = false
+            self.ipcMissStreak = 0
             try mgr.connection.startVPNTunnel()
             self.lastError = nil
         } catch {
@@ -121,6 +134,9 @@ final class VPNManager: ObservableObject {
             self.status = .disabled
             self.goStatus = ""
             self.stats = .init()
+            self.lastSnapshotAt = nil
+            self.firstSnapshotLogged = false
+            self.ipcMissStreak = 0
             self.lastError = nil
         } catch {
             self.lastError = error.localizedDescription
@@ -166,6 +182,9 @@ final class VPNManager: ObservableObject {
                 goStatus = ""
                 stats = .init()
                 lastLogSeq = 0
+                lastSnapshotAt = nil
+                firstSnapshotLogged = false
+                ipcMissStreak = 0
             }
         }
     }
@@ -186,29 +205,56 @@ final class VPNManager: ObservableObject {
     }
 
     private func pollOnce() async {
-        guard let session = manager?.connection as? NETunnelProviderSession else { return }
+        guard let session = manager?.connection as? NETunnelProviderSession else {
+            // Should not happen for a packet-tunnel manager — surface once, then
+            // stay quiet to avoid log spam if the user is staring at this.
+            noteIPCMiss(reason: "connection is not NETunnelProviderSession")
+            return
+        }
         let req = ProviderRequest(op: "snapshot", sinceLogSeq: lastLogSeq)
-        guard let body = try? JSONEncoder().encode(req) else { return }
-        let snapshot: ProviderSnapshot? = await withCheckedContinuation { cont in
+        guard let body = try? JSONEncoder().encode(req) else {
+            noteIPCMiss(reason: "failed to encode snapshot request")
+            return
+        }
+        let result: Result<ProviderSnapshot, String> = await withCheckedContinuation { cont in
             do {
                 try session.sendProviderMessage(body) { data in
-                    guard let data,
-                          let decoded = try? JSONDecoder().decode(ProviderSnapshot.self, from: data)
-                    else {
-                        cont.resume(returning: nil)
+                    guard let data else {
+                        cont.resume(returning: .failure("provider returned nil"))
                         return
                     }
-                    cont.resume(returning: decoded)
+                    do {
+                        let decoded = try JSONDecoder().decode(ProviderSnapshot.self, from: data)
+                        cont.resume(returning: .success(decoded))
+                    } catch {
+                        cont.resume(returning: .failure("decode failed: \(error.localizedDescription)"))
+                    }
                 }
             } catch {
-                cont.resume(returning: nil)
+                cont.resume(returning: .failure("sendProviderMessage threw: \(error.localizedDescription)"))
             }
         }
-        guard let snapshot else { return }
-        apply(snapshot)
+        switch result {
+        case .success(let snapshot):
+            apply(snapshot)
+        case .failure(let reason):
+            noteIPCMiss(reason: reason)
+        }
+    }
+
+    /// Rate-limited diagnostic: emit once on first miss, then every 10s while
+    /// misses continue. Keeps the Logs tab readable when the extension is
+    /// genuinely down (otherwise we'd append one line per poll = 1/sec).
+    private func noteIPCMiss(reason: String) {
+        ipcMissStreak += 1
+        if ipcMissStreak == 1 || ipcMissStreak % 10 == 0 {
+            logStore?.append("[vpn] snapshot unavailable (\(ipcMissStreak)x): \(reason)")
+        }
     }
 
     private func apply(_ snapshot: ProviderSnapshot) {
+        ipcMissStreak = 0
+        lastSnapshotAt = Date()
         goStatus = snapshot.status
         stats = VPNStats(
             bytesUp: snapshot.bytesUp,
@@ -224,6 +270,15 @@ final class VPNManager: ObservableObject {
             for entry in snapshot.logs {
                 store.append("[vpn] \(entry.text)")
             }
+        }
+        if !firstSnapshotLogged {
+            firstSnapshotLogged = true
+            logStore?.append(
+                "[vpn] first snapshot: status=\(snapshot.status) " +
+                "up=\(snapshot.bytesUp) down=\(snapshot.bytesDown) " +
+                "tcp=\(snapshot.tcpFlowsActive)/\(snapshot.tcpFlowsAccepted) " +
+                "dns=\(snapshot.dnsQueriesHandled)"
+            )
         }
         if snapshot.status.hasPrefix("error:"), lastError == nil {
             lastError = String(snapshot.status.dropFirst("error:".count))
