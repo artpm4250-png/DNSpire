@@ -35,11 +35,16 @@ struct ProviderSnapshot: Codable {
     var resolversTotal: Int = 0
     /// Resolvers currently in rotation (valid + enabled).
     var resolversActive: Int = 0
+    /// CSV "uMin,uMed,uMax,dMin,dMed,dMax,sampleCount" of per-connection
+    /// upload/download MTU bytes once the balancer has settled. Empty before
+    /// MTU probing completes.
+    var mtuSummary: String = ""
 
     enum CodingKeys: String, CodingKey {
         case status, bytesUp, bytesDown, tcpFlowsAccepted, tcpFlowsActive
         case dnsQueriesHandled, logs, lastLogSeq
         case verification, lastVerifiedAt, resolversTotal, resolversActive
+        case mtuSummary
     }
 
     init(status: String,
@@ -53,7 +58,8 @@ struct ProviderSnapshot: Codable {
          verification: String = "",
          lastVerifiedAt: Int64 = 0,
          resolversTotal: Int = 0,
-         resolversActive: Int = 0) {
+         resolversActive: Int = 0,
+         mtuSummary: String = "") {
         self.status = status
         self.bytesUp = bytesUp
         self.bytesDown = bytesDown
@@ -66,6 +72,7 @@ struct ProviderSnapshot: Codable {
         self.lastVerifiedAt = lastVerifiedAt
         self.resolversTotal = resolversTotal
         self.resolversActive = resolversActive
+        self.mtuSummary = mtuSummary
     }
 
     init(from decoder: Decoder) throws {
@@ -82,6 +89,7 @@ struct ProviderSnapshot: Codable {
         lastVerifiedAt = try c.decodeIfPresent(Int64.self, forKey: .lastVerifiedAt) ?? 0
         resolversTotal = try c.decodeIfPresent(Int.self, forKey: .resolversTotal) ?? 0
         resolversActive = try c.decodeIfPresent(Int.self, forKey: .resolversActive) ?? 0
+        mtuSummary = try c.decodeIfPresent(String.self, forKey: .mtuSummary) ?? ""
     }
 }
 

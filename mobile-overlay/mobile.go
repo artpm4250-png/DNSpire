@@ -18,6 +18,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -139,6 +140,53 @@ func (t *Tunnel) ResolversActive() int {
 		return 0
 	}
 	return b.ActiveCount()
+}
+
+// MTUSummary returns a snapshot of the upload and download MTU values that the
+// balancer has settled on across all active connections, encoded as the CSV
+// string "uMin,uMed,uMax,dMin,dMed,dMax,sampleCount". Returns "" when no
+// connection has been MTU-tested yet (pre-Start, mid-probe, or all-failed).
+//
+// Encoded as a string to keep the gomobile surface trivial — six ints in a
+// known order is enough for the Swift side to split-and-parse without a
+// dedicated DTO.
+func (t *Tunnel) MTUSummary() string {
+	t.mu.Lock()
+	app := t.app
+	t.mu.Unlock()
+	if app == nil {
+		return ""
+	}
+	b := app.Balancer()
+	if b == nil {
+		return ""
+	}
+	conns := b.AllConnections()
+	if len(conns) == 0 {
+		return ""
+	}
+	uploads := make([]int, 0, len(conns))
+	downloads := make([]int, 0, len(conns))
+	for _, c := range conns {
+		if c.UploadMTUBytes > 0 {
+			uploads = append(uploads, c.UploadMTUBytes)
+		}
+		if c.DownloadMTUBytes > 0 {
+			downloads = append(downloads, c.DownloadMTUBytes)
+		}
+	}
+	if len(uploads) == 0 || len(downloads) == 0 {
+		return ""
+	}
+	sort.Ints(uploads)
+	sort.Ints(downloads)
+	uMin, uMed, uMax := uploads[0], uploads[len(uploads)/2], uploads[len(uploads)-1]
+	dMin, dMed, dMax := downloads[0], downloads[len(downloads)/2], downloads[len(downloads)-1]
+	sample := len(uploads)
+	if len(downloads) < sample {
+		sample = len(downloads)
+	}
+	return fmt.Sprintf("%d,%d,%d,%d,%d,%d,%d", uMin, uMed, uMax, dMin, dMed, dMax, sample)
 }
 
 // Start launches the upstream client using the provided JSON config blob (same

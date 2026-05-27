@@ -359,11 +359,18 @@ final class ConfigStore: ObservableObject {
 
     /// Serialize the draft into the JSON shape the upstream Go client expects
     /// (TOML key names, uppercase). Returns nil if required fields are missing.
-    func encodedConfigJSON() -> String? {
+    ///
+    /// `mtuHint`, when non-nil, narrows MIN/MAX_UPLOAD_MTU and
+    /// MIN/MAX_DOWNLOAD_MTU to a band around the persisted medians (see
+    /// [[MTUHintStore]] for the band width). Upstream still runs an MTU
+    /// bisect, but inside a tighter window — cutting bootstrap time on a
+    /// known path without skipping validation.
+    func encodedConfigJSON(mtuHint: MTUHint? = nil) -> String? {
         encodedConfigJSON(
             domainsSource: draft.domains,
             encryptionKeySource: draft.encryptionKey,
-            dataEncryptionMethodSource: draft.dataEncryptionMethod
+            dataEncryptionMethodSource: draft.dataEncryptionMethod,
+            mtuHint: mtuHint
         )
     }
 
@@ -376,14 +383,16 @@ final class ConfigStore: ObservableObject {
         encodedConfigJSON(
             domainsSource: server.domains,
             encryptionKeySource: server.encryptionKey,
-            dataEncryptionMethodSource: server.dataEncryptionMethod
+            dataEncryptionMethodSource: server.dataEncryptionMethod,
+            mtuHint: nil
         )
     }
 
     private func encodedConfigJSON(
         domainsSource: [String],
         encryptionKeySource: String,
-        dataEncryptionMethodSource: Int
+        dataEncryptionMethodSource: Int,
+        mtuHint: MTUHint?
     ) -> String? {
         let cleanedDomains = domainsSource
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -394,7 +403,7 @@ final class ConfigStore: ObservableObject {
         // The Go config struct uses uppercase TOML tags (DOMAINS, ENCRYPTION_KEY,
         // ...). The JSON loader honours those same tags. See upstream:
         // internal/config/json_config.go decodeConfigJSONInto.
-        let dict: [String: Any] = [
+        var dict: [String: Any] = [
             "DOMAINS": cleanedDomains,
             "ENCRYPTION_KEY": encryptionKeySource,
             "DATA_ENCRYPTION_METHOD": dataEncryptionMethodSource,
@@ -418,6 +427,21 @@ final class ConfigStore: ObservableObject {
             "MAX_PACKETS_PER_BATCH": draft.maxPacketsPerBatch,
             "ARQ_WINDOW_SIZE": draft.arqWindowSize
         ]
+
+        if let hint = mtuHint {
+            let band = MTUHintStore.bandwidth
+            // Upstream's hard floors (internal/config/client.go defaults):
+            // upload >= 38, download >= 100. Anything tighter risks tripping
+            // the "MIN > MAX" validator in cfg.ValidateClient.
+            let uMin = max(38, hint.uploadMedian - band)
+            let uMax = max(uMin, hint.uploadMedian + band)
+            let dMin = max(100, hint.downloadMedian - band)
+            let dMax = max(dMin, hint.downloadMedian + band)
+            dict["MIN_UPLOAD_MTU"] = uMin
+            dict["MAX_UPLOAD_MTU"] = uMax
+            dict["MIN_DOWNLOAD_MTU"] = dMin
+            dict["MAX_DOWNLOAD_MTU"] = dMax
+        }
 
         guard let data = try? JSONSerialization.data(withJSONObject: dict, options: []) else {
             return nil

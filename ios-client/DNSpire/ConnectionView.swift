@@ -34,6 +34,7 @@ struct ConnectionView: View {
     @EnvironmentObject var tunnel: TunnelController
     @EnvironmentObject var logStore: LogStore
     @EnvironmentObject var vpn: VPNManager
+    @EnvironmentObject var mtuHints: MTUHintStore
 
     @AppStorage("DNSpire.tunnelMode") private var modeRaw: String = TunnelMode.proxy.rawValue
 
@@ -84,7 +85,8 @@ struct ConnectionView: View {
                         LiveTunnelCard(
                             stats: vpn.stats,
                             goStatus: vpn.goStatus,
-                            lastSnapshotAt: vpn.lastSnapshotAt
+                            lastSnapshotAt: vpn.lastSnapshotAt,
+                            mtuHintApplied: vpn.mtuHintApplied
                         )
                     }
 
@@ -219,14 +221,26 @@ struct ConnectionView: View {
             if active {
                 vpn.disconnect()
             } else {
-                guard let json = configStore.encodedConfigJSON() else {
+                let activeServerID = profileStore.activeServerID
+                let hint = mtuHints.hint(for: activeServerID)
+                guard let json = configStore.encodedConfigJSON(mtuHint: hint) else {
                     logStore.append("[ui] cannot start: required fields missing")
                     return
                 }
                 let resolvers = configStore.encodedResolversText()
                 let dns = configStore.normalizedSystemVPNDNSResolver()
                 let verifyURL = configStore.normalizedVerifyURL()
-                Task { await vpn.connect(configJSON: json, resolversText: resolvers, dnsResolver: dns, verifyURL: verifyURL) }
+                let hintApplied = hint != nil
+                Task {
+                    await vpn.connect(
+                        configJSON: json,
+                        resolversText: resolvers,
+                        dnsResolver: dns,
+                        verifyURL: verifyURL,
+                        serverID: activeServerID,
+                        mtuHintApplied: hintApplied
+                    )
+                }
             }
         } label: {
             Text(active ? "Disconnect" : "Enable System VPN")
@@ -552,6 +566,7 @@ private struct LiveTunnelCard: View {
     let stats: VPNStats
     let goStatus: String
     let lastSnapshotAt: Date?
+    let mtuHintApplied: Bool
 
     @State private var prevSample: (stats: VPNStats, at: Date)?
     @State private var upRate: Double = 0
@@ -582,6 +597,12 @@ private struct LiveTunnelCard: View {
                 Image(systemName: "dot.radiowaves.up.forward")
                     .foregroundStyle(.tint)
                 Text("Live tunnel").font(.headline)
+                if mtuHintApplied {
+                    Image(systemName: "bolt.fill")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.yellow)
+                        .help("MTU bands narrowed from a previous session")
+                }
                 Spacer()
                 liveness
             }
@@ -607,6 +628,11 @@ private struct LiveTunnelCard: View {
                 miniStat(label: "TCP", value: "\(stats.tcpFlowsActive)", sub: "of \(stats.tcpFlowsAccepted)")
                 miniStat(label: "DNS", value: "\(stats.dnsQueriesHandled)", sub: "queries")
                 miniStat(label: "Resolvers", value: "\(stats.resolversActive)", sub: "of \(stats.resolversTotal)")
+            }
+
+            if let mtu = stats.mtu {
+                Divider()
+                MTURow(mtu: mtu)
             }
 
             Divider()
@@ -718,6 +744,57 @@ private struct LiveTunnelCard: View {
         let bytes = Int64(rate.rounded())
         if bytes <= 0 { return "idle" }
         return "\(Self.rateFormatter.string(fromByteCount: bytes))/s"
+    }
+}
+
+private struct MTURow: View {
+    let mtu: MTUSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("MTU")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                Text("· \(mtu.sampleCount) link\(mtu.sampleCount == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+            }
+            HStack(spacing: 12) {
+                directionLine(
+                    symbol: "arrow.up",
+                    tint: .accentColor,
+                    min: mtu.uploadMin,
+                    med: mtu.uploadMedian,
+                    max: mtu.uploadMax
+                )
+                directionLine(
+                    symbol: "arrow.down",
+                    tint: .green,
+                    min: mtu.downloadMin,
+                    med: mtu.downloadMedian,
+                    max: mtu.downloadMax
+                )
+            }
+        }
+    }
+
+    private func directionLine(symbol: String, tint: Color, min: Int, med: Int, max: Int) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(med)")
+                    .font(.subheadline.monospacedDigit().weight(.semibold))
+                Text("\(min)–\(max) B")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

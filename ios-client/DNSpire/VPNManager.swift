@@ -27,6 +27,39 @@ struct VPNStats: Equatable {
     var dnsQueriesHandled: Int64 = 0
     var resolversTotal: Int = 0
     var resolversActive: Int = 0
+    var mtu: MTUSummary? = nil
+}
+
+/// Per-connection upload/download MTU summary parsed from the CSV the
+/// packet-tunnel extension forwards from `Tunnel.MTUSummary()`. `nil` until
+/// the balancer has settled on at least one valid connection.
+struct MTUSummary: Equatable {
+    var uploadMin: Int
+    var uploadMedian: Int
+    var uploadMax: Int
+    var downloadMin: Int
+    var downloadMedian: Int
+    var downloadMax: Int
+    var sampleCount: Int
+
+    /// Parse the "uMin,uMed,uMax,dMin,dMed,dMax,sample" CSV form. Returns
+    /// `nil` for empty input or any malformed row — older extensions that
+    /// don't yet emit the field land here and the UI just hides the panel.
+    init?(csv: String) {
+        let parts = csv.split(separator: ",", omittingEmptySubsequences: false)
+        guard parts.count == 7 else { return nil }
+        guard let uMin = Int(parts[0]), let uMed = Int(parts[1]), let uMax = Int(parts[2]),
+              let dMin = Int(parts[3]), let dMed = Int(parts[4]), let dMax = Int(parts[5]),
+              let sample = Int(parts[6]) else { return nil }
+        guard sample > 0 else { return nil }
+        self.uploadMin = uMin
+        self.uploadMedian = uMed
+        self.uploadMax = uMax
+        self.downloadMin = dMin
+        self.downloadMedian = dMed
+        self.downloadMax = dMax
+        self.sampleCount = sample
+    }
 }
 
 /// VPNManager wraps NETunnelProviderManager: it installs the system VPN
@@ -54,11 +87,23 @@ final class VPNManager: ObservableObject {
     /// "Remove profile" button visibility.
     @Published private(set) var profileInstalled: Bool = false
 
+    /// Server profile ID associated with the current session, captured from
+    /// the call site at `connect(...)`. Nil between sessions. Used to route
+    /// the per-snapshot MTU observation back into [[MTUHintStore]] without
+    /// VPNManager needing direct access to [[ProfileStore]].
+    @Published private(set) var activeSessionServerID: UUID?
+    /// True when [[ConnectionView]] resolved a non-stale [[MTUHint]] for the
+    /// active server and passed it to `connect(...)`. Surfaced as a small bolt
+    /// glyph in the LiveTunnelCard header so the user can tell why bootstrap
+    /// felt faster on a familiar server.
+    @Published private(set) var mtuHintApplied: Bool = false
+
     private static let bundleId = "com.dnspire.ios.tunnel"
 
     private var manager: NETunnelProviderManager?
     private var observer: AnyObject?
     private weak var logStore: LogStore?
+    private weak var mtuHintStore: MTUHintStore?
 
     private var pollTask: Task<Void, Never>?
     private var lastLogSeq: Int = 0
@@ -82,6 +127,14 @@ final class VPNManager: ObservableObject {
         self.logStore = logStore
     }
 
+    /// Wires the MTU hint store. Called once from DNSpireApp.task. The
+    /// extension-snapshot apply path writes hints back through this; the
+    /// connect path reads from it. Held weakly to keep the store the single
+    /// owner.
+    func attach(mtuHintStore: MTUHintStore) {
+        self.mtuHintStore = mtuHintStore
+    }
+
     /// Load or create the VPN configuration. Idempotent — calling repeatedly
     /// just refreshes the cached manager and current status.
     func reloadManager() async {
@@ -100,7 +153,14 @@ final class VPNManager: ObservableObject {
 
     /// Install the profile (creating it on first run; updating providerConfig
     /// on subsequent runs) and start the tunnel.
-    func connect(configJSON: String, resolversText: String, dnsResolver: String, verifyURL: String) async {
+    func connect(
+        configJSON: String,
+        resolversText: String,
+        dnsResolver: String,
+        verifyURL: String,
+        serverID: UUID? = nil,
+        mtuHintApplied: Bool = false
+    ) async {
         do {
             let mgr = manager ?? NETunnelProviderManager()
 
@@ -130,6 +190,8 @@ final class VPNManager: ObservableObject {
             self.lastSnapshotAt = nil
             self.firstSnapshotLogged = false
             self.ipcMissStreak = 0
+            self.activeSessionServerID = serverID
+            self.mtuHintApplied = mtuHintApplied
             try mgr.connection.startVPNTunnel()
             self.lastError = nil
         } catch {
@@ -172,6 +234,8 @@ final class VPNManager: ObservableObject {
             self.lastSnapshotAt = nil
             self.firstSnapshotLogged = false
             self.ipcMissStreak = 0
+            self.activeSessionServerID = nil
+            self.mtuHintApplied = false
             self.lastError = nil
         } catch {
             self.lastError = error.localizedDescription
@@ -221,6 +285,8 @@ final class VPNManager: ObservableObject {
                 lastSnapshotAt = nil
                 firstSnapshotLogged = false
                 ipcMissStreak = 0
+                activeSessionServerID = nil
+                mtuHintApplied = false
             }
         }
     }
@@ -298,8 +364,16 @@ final class VPNManager: ObservableObject {
             tcpFlowsAccepted: snapshot.tcpFlowsAccepted,
             dnsQueriesHandled: snapshot.dnsQueriesHandled,
             resolversTotal: snapshot.resolversTotal,
-            resolversActive: snapshot.resolversActive
+            resolversActive: snapshot.resolversActive,
+            mtu: MTUSummary(csv: snapshot.mtuSummary)
         )
+        if let mtu = stats.mtu, let serverID = activeSessionServerID {
+            mtuHintStore?.record(
+                serverID: serverID,
+                uploadMedian: mtu.uploadMedian,
+                downloadMedian: mtu.downloadMedian
+            )
+        }
         verification = mapVerification(snapshot.verification, lastVerifiedAtMs: snapshot.lastVerifiedAt)
         if snapshot.lastLogSeq > lastLogSeq {
             lastLogSeq = snapshot.lastLogSeq

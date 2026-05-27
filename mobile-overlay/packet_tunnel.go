@@ -148,6 +148,10 @@ func (pt *PacketTunnel) ResolversTotal() int { return pt.tunnel.ResolversTotal()
 // (in-rotation) resolver count.
 func (pt *PacketTunnel) ResolversActive() int { return pt.tunnel.ResolversActive() }
 
+// MTUSummary forwards to the inner Tunnel's MTU summary string (CSV form, see
+// Tunnel.MTUSummary doc). Empty before bootstrap or while still probing.
+func (pt *PacketTunnel) MTUSummary() string { return pt.tunnel.MTUSummary() }
+
 // LastStatus returns the most recent status string emitted by the inner
 // Tunnel (e.g. "mtu_testing", "connected", "error:..."). Empty before
 // Start.

@@ -140,7 +140,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             verification: v.state,
             lastVerifiedAt: v.lastVerifiedAt,
             resolversTotal: pt?.resolversTotal() ?? 0,
-            resolversActive: pt?.resolversActive() ?? 0
+            resolversActive: pt?.resolversActive() ?? 0,
+            mtuSummary: pt?.mtuSummary() ?? ""
         )
     }
 
