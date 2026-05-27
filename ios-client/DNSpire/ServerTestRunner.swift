@@ -40,6 +40,11 @@ final class ServerTestRunner: ObservableObject {
     @Published private(set) var outcomes: [UUID: Outcome] = [:]
     @Published private(set) var results: [UUID: PersistedResult] = [:]
     @Published private(set) var isRunning = false
+    /// Monotonic counter incremented on each `testAll` start so the UI can
+    /// reset its "Dismissed this suggestion" state whenever fresh data
+    /// arrives. Compared against `dismissedEpoch`.
+    @Published private(set) var runEpoch: UInt64 = 0
+    @Published private(set) var dismissedEpoch: UInt64 = 0
 
     /// Total wall-clock budget per server probe. `nonisolated` so it can be
     /// referenced as a default argument (call-site default-arg evaluation is
@@ -65,6 +70,35 @@ final class ServerTestRunner: ObservableObject {
         UserDefaults.standard.removeObject(forKey: Self.persistKey)
     }
 
+    /// Maximum age for a persisted `.ok` result to still be considered a
+    /// useful hint for auto-pick. Older than this and the network conditions
+    /// likely changed enough that "Test all" should run again first.
+    nonisolated static let suggestionMaxAge: TimeInterval = 7 * 24 * 60 * 60
+
+    /// Lowest-latency server with a fresh `.ok` result, among the supplied
+    /// candidate IDs (typically `profileStore.servers`). `nil` if no row
+    /// qualifies. Used to drive the "Switch to fastest" suggestion banner.
+    func fastestServerID(among candidates: [UUID]) -> (id: UUID, ms: Int)? {
+        let now = Date()
+        var best: (id: UUID, ms: Int)? = nil
+        for id in candidates {
+            guard let r = results[id] else { continue }
+            guard now.timeIntervalSince(r.at) <= Self.suggestionMaxAge else { continue }
+            guard case .ok(let ms) = r.outcome else { continue }
+            if best == nil || ms < best!.ms {
+                best = (id, ms)
+            }
+        }
+        return best
+    }
+
+    /// Hide the suggestion banner until the next `testAll` run. The UI checks
+    /// `dismissedEpoch == runEpoch` to know whether the dismiss is still
+    /// in effect.
+    func dismissSuggestion() {
+        dismissedEpoch = runEpoch
+    }
+
     /// Drop any persisted result whose server is no longer present in the
     /// active profile list. Called when the user deletes a server profile.
     func prune(to liveServerIDs: Set<UUID>) {
@@ -86,6 +120,7 @@ final class ServerTestRunner: ObservableObject {
         guard !servers.isEmpty else { return }
 
         isRunning = true
+        runEpoch &+= 1
         defer { isRunning = false }
 
         let resolversText = configStore.encodedResolversText()

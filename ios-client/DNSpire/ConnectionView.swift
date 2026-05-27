@@ -68,6 +68,8 @@ struct ConnectionView: View {
                         SaveToProfileButton()
                     }
 
+                    FastestServerSuggestionBanner(connectionBusy: isCurrentlyRunning)
+
                     actionButton
 
                     if !canConnect, !isCurrentlyRunning {

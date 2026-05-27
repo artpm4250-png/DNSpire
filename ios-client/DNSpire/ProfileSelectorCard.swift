@@ -124,6 +124,95 @@ struct ProfileSelectorCard: View {
     }
 }
 
+// MARK: - Auto-pick fastest
+
+/// Banner-style suggestion shown above the connection action button when a
+/// recent `Test all` revealed a faster server than the currently-active
+/// profile (or the active profile's last probe failed and a working one is
+/// available). One tap switches; an `xmark` dismisses until the next probe
+/// pass.
+///
+/// Renders nothing when the user is connected/connecting (changing the
+/// active server underneath a live tunnel would tear it down — not what
+/// you want for an unsolicited suggestion) or when the active server is
+/// already the fastest.
+struct FastestServerSuggestionBanner: View {
+    @EnvironmentObject var configStore: ConfigStore
+    @EnvironmentObject var profileStore: ProfileStore
+    @EnvironmentObject var testRunner: ServerTestRunner
+
+    let connectionBusy: Bool
+
+    var body: some View {
+        if let pick = suggestion {
+            HStack(spacing: 10) {
+                Image(systemName: "bolt.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Faster server available")
+                        .font(.subheadline.weight(.semibold))
+                    Text(pick.body)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                Button("Switch") {
+                    profileStore.setActiveServer(pick.id, applying: &configStore.draft)
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                Button {
+                    testRunner.dismissSuggestion()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss")
+            }
+            .padding(14)
+            .background(Color(.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    private struct Pick {
+        let id: UUID
+        let body: String
+    }
+
+    private var suggestion: Pick? {
+        guard !connectionBusy else { return nil }
+        guard testRunner.dismissedEpoch != testRunner.runEpoch else { return nil }
+
+        let candidates = profileStore.servers.map(\.id)
+        guard let best = testRunner.fastestServerID(among: candidates) else { return nil }
+        let activeID = profileStore.activeServerID
+        if best.id == activeID { return nil }
+
+        guard let bestName = profileStore.servers.first(where: { $0.id == best.id })?.name else { return nil }
+        let activeMs: Int? = {
+            guard let r = testRunner.results[activeID], case .ok(let ms) = r.outcome else { return nil }
+            return ms
+        }()
+        let body: String
+        if let activeMs {
+            // Only suggest if "best" is meaningfully faster — guard against
+            // jitter promoting a 1ms difference into a banner.
+            guard activeMs - best.ms >= 30 else { return nil }
+            body = "\(bestName) — \(best.ms) ms · current \(activeMs) ms"
+        } else {
+            body = "\(bestName) — \(best.ms) ms · current server has no recent result"
+        }
+        return Pick(id: best.id, body: body)
+    }
+}
+
 // MARK: - Slice sheet
 
 /// Modal list of profiles for one slice. Tapping a non-active row prompts to
