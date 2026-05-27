@@ -88,8 +88,7 @@ struct LogsView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                filterBar
-                levelBar
+                filterBars
                 if logStore.isAtCap {
                     capBanner
                 }
@@ -171,9 +170,9 @@ struct LogsView: View {
         .background(Color.orange.opacity(0.10))
     }
 
-    private var filterBar: some View {
+    private var filterBars: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 ForEach(LogSource.allCases) { src in
                     SourceChip(
                         source: src,
@@ -183,16 +182,10 @@ struct LogsView: View {
                         selectedSource = src
                     }
                 }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-        }
-        .background(Color(.systemBackground))
-    }
-
-    private var levelBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+                Rectangle()
+                    .fill(Color(.separator))
+                    .frame(width: 1, height: 18)
+                    .padding(.horizontal, 4)
                 ForEach(LevelFilter.allCases) { lvl in
                     LevelChip(
                         filter: lvl,
@@ -204,7 +197,7 @@ struct LogsView: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.bottom, 8)
+            .padding(.vertical, 8)
         }
         .background(Color(.systemBackground))
     }
@@ -317,23 +310,23 @@ private struct SourceChip: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Image(systemName: source.icon)
-                    .font(.caption)
+                    .font(.caption2)
                 Text(source.label)
-                    .font(.subheadline.weight(.medium))
+                    .font(.caption.weight(.semibold))
                 if count > 0 {
                     Text("\(count)")
                         .font(.caption2.monospacedDigit())
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(
                             Capsule().fill(selected ? Color.white.opacity(0.25) : Color(.tertiarySystemFill))
                         )
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
             .foregroundStyle(selected ? Color.white : Color.primary)
             .background(
                 Capsule().fill(selected ? Color.accentColor : Color(.secondarySystemBackground))
@@ -351,18 +344,18 @@ private struct LevelChip: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Image(systemName: filter.icon)
-                    .font(.caption)
-                Text(filter.label)
-                    .font(.caption.weight(.medium))
+                    .font(.caption2)
+                Text(shortLabel)
+                    .font(.caption.weight(.semibold))
                 if count > 0 {
                     Text("\(count)")
                         .font(.caption2.monospacedDigit())
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(
-                            Capsule().fill(selected ? Color.white.opacity(0.25) : Color(.tertiarySystemFill))
+                            Capsule().fill(selected ? Color.white.opacity(0.25) : tint.opacity(0.18))
                         )
                 }
             }
@@ -374,6 +367,18 @@ private struct LevelChip: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    /// Drops the "+" suffix from "Info+" / "Warn+" so all chips read at a
+    /// glance when shoulder-to-shoulder with the source bar. The icon
+    /// already conveys severity.
+    private var shortLabel: String {
+        switch filter {
+        case .all:   return "All"
+        case .info:  return "Info"
+        case .warn:  return "Warn"
+        case .error: return "Error"
+        }
     }
 
     private var tint: Color {

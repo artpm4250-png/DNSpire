@@ -88,17 +88,22 @@ struct SettingsView: View {
                         keyboard: .URL,
                         error: isValidVerifyURL ? nil : "Must be an https:// URL"
                     )
-                    if vpn.profileInstalled {
+                } header: {
+                    Text("System VPN")
+                } footer: {
+                    Text("DNS-over-TCP target the packet-tunnel extension shims UDP-53 onto. Use a resolver reachable through your DNS tunnel (e.g. 1.1.1.1:53, 8.8.8.8:53). Ignored in SOCKS5 proxy mode. Verify URL is the HTTPS endpoint the extension hits after connecting to confirm end-to-end data flow.")
+                }
+
+                if vpn.profileInstalled {
+                    Section {
                         Button(role: .destructive) {
                             showRemoveProfileAlert = true
                         } label: {
                             Label("Remove VPN profile", systemImage: "trash")
                         }
+                    } footer: {
+                        Text("Deletes the DNSpire entry from iOS VPN settings. You'll be prompted for permission again the next time you enable System VPN.")
                     }
-                } header: {
-                    Text("System VPN")
-                } footer: {
-                    Text("DNS-over-TCP target the packet-tunnel extension shims UDP-53 onto. Use a resolver reachable through your DNS tunnel (e.g. 1.1.1.1:53, 8.8.8.8:53). Ignored in SOCKS5 proxy mode. Verify URL is the HTTPS endpoint the extension hits after connecting to confirm end-to-end data flow.")
                 }
 
                 Section {
