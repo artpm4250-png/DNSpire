@@ -9,6 +9,7 @@ struct DNSpireApp: App {
     @StateObject private var vpn = VPNManager()
     @StateObject private var testRunner = ServerTestRunner()
     @StateObject private var mtuHints = MTUHintStore()
+    @StateObject private var scanner = ResolverScanner()
 
     /// User-controlled opt-in. When true, on app launch DNSpire compares the
     /// active server profile against persisted [[ServerTestRunner]] results
@@ -35,6 +36,7 @@ struct DNSpireApp: App {
                 .environmentObject(vpn)
                 .environmentObject(testRunner)
                 .environmentObject(mtuHints)
+                .environmentObject(scanner)
                 .task {
                     tunnel.attach(logStore: logStore)
                     vpn.attach(logStore: logStore)

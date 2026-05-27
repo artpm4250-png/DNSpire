@@ -750,6 +750,235 @@ func ProbeServerDetailed(configJSON, resolversText, scratchDir string, timeoutMs
 	return ms, details, nil
 }
 
+// ProbeResolvers sends a small DNS A-query to each `addr` in the list and
+// reports which ones answered, with latency. Designed to back the iOS
+// "Scan" tab — see [[ResolverScanner]].
+//
+// Input: `addrs` is a `;`-separated list of resolvers. Each entry is either
+//   - "IP"            (port defaults to 53)
+//   - "IP:PORT"
+//
+// Empty or malformed entries are reported in-place as failures so the result
+// length matches the input length and the Swift side can render rows
+// positionally without re-parsing.
+//
+// The probe sends a single DNS A-query for `controlName` ("example.com" if
+// empty), waits up to `perRequestTimeoutMs`, and times out the whole batch
+// at `totalTimeoutMs`. Up to `parallelism` queries are in flight at once
+// (clamped to [1, 64]). This function does NOT depend on the upstream
+// client config; resolvers in the input do not need to be part of any
+// active profile.
+//
+// Output: `;`-separated rows, one per input row in the same order. Each row
+// is `index|ok|latencyMs|error`:
+//   - `index`     — 0-based position in the input list
+//   - `ok`        — "1" or "0"
+//   - `latencyMs` — wall-clock time for the query; 0 on failure
+//   - `error`     — empty on success; "malformed", "timeout", "io",
+//     "shortread", "badreply" on failure
+//
+// Errors that prevent ANY work (e.g. an empty `addrs` list) come back via
+// the function's error return; per-row failures land inside the result
+// string so the caller can render them per-row.
+func ProbeResolvers(addrs, controlName string, perRequestTimeoutMs, totalTimeoutMs, parallelism int) (string, error) {
+	entries := strings.Split(addrs, ";")
+	if len(entries) == 0 || (len(entries) == 1 && strings.TrimSpace(entries[0]) == "") {
+		return "", errors.New("config:empty addr list")
+	}
+	if perRequestTimeoutMs <= 0 {
+		perRequestTimeoutMs = 1500
+	}
+	if totalTimeoutMs <= 0 {
+		totalTimeoutMs = 15_000
+	}
+	if parallelism < 1 {
+		parallelism = 1
+	}
+	if parallelism > 64 {
+		parallelism = 64
+	}
+	name := strings.TrimSpace(controlName)
+	if name == "" {
+		name = "example.com"
+	}
+
+	type rowResult struct {
+		idx     int
+		ok      bool
+		ms      int64
+		errCode string
+	}
+	results := make([]rowResult, len(entries))
+
+	totalCtx, cancel := context.WithTimeout(context.Background(), time.Duration(totalTimeoutMs)*time.Millisecond)
+	defer cancel()
+
+	sem := make(chan struct{}, parallelism)
+	var wg sync.WaitGroup
+	for i, raw := range entries {
+		i, raw := i, strings.TrimSpace(raw)
+		results[i].idx = i
+		if raw == "" {
+			results[i].errCode = "malformed"
+			continue
+		}
+		host, port, err := splitHostPort53(raw)
+		if err != nil {
+			results[i].errCode = "malformed"
+			continue
+		}
+		wg.Add(1)
+		select {
+		case sem <- struct{}{}:
+		case <-totalCtx.Done():
+			results[i].errCode = "timeout"
+			wg.Done()
+			continue
+		}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			ok, ms, code := probeOneResolver(totalCtx, host, port, name, time.Duration(perRequestTimeoutMs)*time.Millisecond)
+			results[i].ok = ok
+			results[i].ms = ms
+			results[i].errCode = code
+		}()
+	}
+	wg.Wait()
+
+	var sb strings.Builder
+	for i, r := range results {
+		if i > 0 {
+			sb.WriteByte(';')
+		}
+		ok := "0"
+		if r.ok {
+			ok = "1"
+		}
+		fmt.Fprintf(&sb, "%d|%s|%d|%s", r.idx, ok, r.ms, r.errCode)
+	}
+	return sb.String(), nil
+}
+
+// splitHostPort53 accepts "host" or "host:port" and returns (host, port).
+// Port defaults to 53. The host is not validated as an IP — the upstream
+// resolver lists allow hostnames too and the probe just hands the string
+// to net.Dial which resolves it.
+func splitHostPort53(s string) (string, int, error) {
+	if s == "" {
+		return "", 0, errors.New("empty")
+	}
+	// IPv6 literal forms like "[::1]:53" are not in the upstream resolver
+	// format and would require their own parser; reject for now to keep
+	// the binding small. Plain IPv4 / hostname / "host:port" covers the
+	// real-world resolver lists.
+	if strings.Contains(s, "[") || strings.Count(s, ":") > 1 {
+		return "", 0, errors.New("unsupported address")
+	}
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		port := s[i+1:]
+		host := s[:i]
+		if host == "" || port == "" {
+			return "", 0, errors.New("missing host or port")
+		}
+		var p int
+		if _, err := fmt.Sscanf(port, "%d", &p); err != nil || p <= 0 || p > 65535 {
+			return "", 0, errors.New("bad port")
+		}
+		return host, p, nil
+	}
+	return s, 53, nil
+}
+
+func probeOneResolver(ctx context.Context, host string, port int, qname string, perRequest time.Duration) (bool, int64, string) {
+	deadline := time.Now().Add(perRequest)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+
+	dialer := net.Dialer{Timeout: time.Until(deadline)}
+	conn, err := dialer.DialContext(ctx, "udp", fmt.Sprintf("%s:%d", host, port))
+	if err != nil {
+		return false, 0, "io"
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(deadline)
+
+	// Pseudo-random 16-bit ID so concurrent probes to the same resolver
+	// don't accidentally match each other's reply on a kernel UDP socket.
+	// time.Now().UnixNano() is fine: this is collision avoidance, not
+	// crypto. atomic.Uint64 counter would also work but adds package
+	// state for negligible benefit.
+	id := uint16(time.Now().UnixNano() & 0xFFFF)
+	query := buildDNSAQuery(id, qname)
+
+	start := time.Now()
+	if _, err := conn.Write(query); err != nil {
+		return false, 0, "io"
+	}
+	buf := make([]byte, 512)
+	n, err := conn.Read(buf)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || isTimeoutErr(err) {
+			return false, 0, "timeout"
+		}
+		return false, 0, "io"
+	}
+	if n < 12 {
+		return false, 0, "shortread"
+	}
+	// Reply ID must match request ID; QR bit (top bit of byte 2) must be 1.
+	if uint16(buf[0])<<8|uint16(buf[1]) != id {
+		return false, 0, "badreply"
+	}
+	if buf[2]&0x80 == 0 {
+		return false, 0, "badreply"
+	}
+	ms := time.Since(start).Milliseconds()
+	return true, ms, ""
+}
+
+func isTimeoutErr(err error) bool {
+	type timeoutMarker interface{ Timeout() bool }
+	var t timeoutMarker
+	if errors.As(err, &t) {
+		return t.Timeout()
+	}
+	return false
+}
+
+// buildDNSAQuery encodes a minimal DNS A-record query for `qname`: header
+// (12 bytes), one question section, no answer/authority/additional. RD bit
+// set so recursive resolvers (which is what we're probing) actually do the
+// lookup; for an authoritative-server check the caller can flip it later.
+func buildDNSAQuery(id uint16, qname string) []byte {
+	buf := make([]byte, 0, 12+len(qname)+6)
+	// Header
+	buf = append(buf,
+		byte(id>>8), byte(id&0xFF),
+		0x01, 0x00, // flags: standard query, RD=1
+		0x00, 0x01, // QDCOUNT=1
+		0x00, 0x00, // ANCOUNT
+		0x00, 0x00, // NSCOUNT
+		0x00, 0x00, // ARCOUNT
+	)
+	// QNAME (length-prefixed labels, terminating 0)
+	for _, label := range strings.Split(qname, ".") {
+		if label == "" {
+			continue
+		}
+		if len(label) > 63 {
+			label = label[:63]
+		}
+		buf = append(buf, byte(len(label)))
+		buf = append(buf, []byte(label)...)
+	}
+	buf = append(buf, 0x00)
+	// QTYPE=A (1), QCLASS=IN (1)
+	buf = append(buf, 0x00, 0x01, 0x00, 0x01)
+	return buf
+}
+
 // Version returns the mobile-binding version tag. Independent of the upstream
 // Go client version (which it pins via go.mod).
 const Version = "ios-mobile-0.1.0"

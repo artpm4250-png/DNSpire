@@ -5,6 +5,8 @@ struct RootView: View {
         TabView {
             ConnectionView()
                 .tabItem { Label("Connect", systemImage: "bolt.horizontal.circle") }
+            ScanView()
+                .tabItem { Label("Scan", systemImage: "magnifyingglass") }
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
             LogsView()
@@ -20,4 +22,5 @@ struct RootView: View {
         .environmentObject(TunnelController())
         .environmentObject(LogStore())
         .environmentObject(VPNManager())
+        .environmentObject(ResolverScanner())
 }
