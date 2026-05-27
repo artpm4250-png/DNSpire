@@ -11,6 +11,20 @@ enum TunnelMode: String, CaseIterable, Identifiable {
         case .systemVPN: return "System-wide VPN"
         }
     }
+
+    var subtitle: String {
+        switch self {
+        case .proxy:     return "Local listener at 127.0.0.1 — point apps at it manually."
+        case .systemVPN: return "Captures all traffic through the iOS Network Extension."
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .proxy:     return "network"
+        case .systemVPN: return "lock.shield.fill"
+        }
+    }
 }
 
 struct ConnectionView: View {
@@ -22,14 +36,7 @@ struct ConnectionView: View {
     @AppStorage("DNSpire.tunnelMode") private var modeRaw: String = TunnelMode.proxy.rawValue
 
     private var mode: TunnelMode {
-        get { TunnelMode(rawValue: modeRaw) ?? .proxy }
-    }
-
-    private var modeSelection: Binding<TunnelMode> {
-        Binding(
-            get: { mode },
-            set: { modeRaw = $0.rawValue }
-        )
+        TunnelMode(rawValue: modeRaw) ?? .proxy
     }
 
     var body: some View {
@@ -51,6 +58,10 @@ struct ConnectionView: View {
                     }
 
                     actionButton
+
+                    if !canConnect, !isCurrentlyRunning {
+                        MissingFieldsCard(items: missingFields)
+                    }
 
                     if mode == .proxy, !tunnel.socksAddress.isEmpty {
                         ProxyCard(address: tunnel.socksAddress)
@@ -81,17 +92,42 @@ struct ConnectionView: View {
         !configStore.encodedResolversText().isEmpty
     }
 
+    private var isCurrentlyRunning: Bool {
+        switch mode {
+        case .proxy:
+            return tunnel.status != .stopped && tunnel.status != .error
+        case .systemVPN:
+            return vpn.status == .connected || vpn.status == .connecting || vpn.status == .reasserting
+        }
+    }
+
+    private var missingFields: [String] {
+        var out: [String] = []
+        if configStore.draft.encryptionKey.isEmpty {
+            out.append("Encryption key")
+        }
+        let hasDomain = !configStore.draft.domains.allSatisfy {
+            $0.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        if !hasDomain { out.append("At least one domain") }
+        if configStore.encodedResolversText().isEmpty {
+            out.append("At least one enabled resolver")
+        }
+        return out
+    }
+
     private var currentError: String? {
         mode == .proxy ? tunnel.lastError : vpn.lastError
     }
 
     private var modePicker: some View {
-        Picker("Mode", selection: modeSelection) {
+        VStack(spacing: 10) {
             ForEach(TunnelMode.allCases) { m in
-                Text(m.label).tag(m)
+                ModeCard(mode: m, selected: mode == m) {
+                    modeRaw = m.rawValue
+                }
             }
         }
-        .pickerStyle(.segmented)
         .padding(.top, 16)
     }
 
@@ -287,9 +323,24 @@ private struct VPNBadge: View {
                         .font(.title)
                         .foregroundStyle(.white)
                 )
+                .overlay(
+                    Circle().stroke(color.opacity(0.35), lineWidth: 8)
+                        .scaleEffect(isInFlight ? 1.25 : 1.0)
+                        .opacity(isInFlight ? 0.0 : 0.6)
+                        .animation(
+                            isInFlight
+                                ? .easeInOut(duration: 1.2).repeatForever(autoreverses: true)
+                                : .default,
+                            value: isInFlight
+                        )
+                )
             Text(label).font(.headline)
             Text(detail).font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    private var isInFlight: Bool {
+        status == .connecting || status == .reasserting || status == .disconnecting
     }
 
     private var label: String {
@@ -400,10 +451,22 @@ private struct ErrorCard: View {
 private struct TrafficCard: View {
     let stats: VPNStats
 
-    private static let formatter: ByteCountFormatter = {
+    @State private var prevSample: (stats: VPNStats, at: Date)?
+    @State private var upRate: Double = 0
+    @State private var downRate: Double = 0
+
+    private static let totalFormatter: ByteCountFormatter = {
         let f = ByteCountFormatter()
         f.allowedUnits = [.useKB, .useMB, .useGB]
         f.countStyle = .binary
+        return f
+    }()
+
+    private static let rateFormatter: ByteCountFormatter = {
+        let f = ByteCountFormatter()
+        f.allowedUnits = [.useKB, .useMB]
+        f.countStyle = .binary
+        f.includesUnit = true
         return f
     }()
 
@@ -415,10 +478,20 @@ private struct TrafficCard: View {
                 Spacer()
             }
             Divider()
-            HStack {
-                metric(systemImage: "arrow.up", label: "Up", value: Self.formatter.string(fromByteCount: stats.bytesUp))
+            HStack(alignment: .top) {
+                metric(
+                    systemImage: "arrow.up",
+                    label: "Up",
+                    value: Self.totalFormatter.string(fromByteCount: stats.bytesUp),
+                    rate: upRate
+                )
                 Spacer()
-                metric(systemImage: "arrow.down", label: "Down", value: Self.formatter.string(fromByteCount: stats.bytesDown))
+                metric(
+                    systemImage: "arrow.down",
+                    label: "Down",
+                    value: Self.totalFormatter.string(fromByteCount: stats.bytesDown),
+                    rate: downRate
+                )
             }
             Divider()
             row("Active TCP", "\(stats.tcpFlowsActive)")
@@ -428,16 +501,44 @@ private struct TrafficCard: View {
         .padding()
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .onChange(of: stats) { _, new in
+            recomputeRate(with: new)
+        }
+        .onAppear {
+            prevSample = (stats, Date())
+        }
     }
 
-    private func metric(systemImage: String, label: String, value: String) -> some View {
+    private func recomputeRate(with new: VPNStats) {
+        let now = Date()
+        defer { prevSample = (new, now) }
+        guard let prev = prevSample else { return }
+        let dt = now.timeIntervalSince(prev.at)
+        guard dt > 0.05 else { return }
+        let dUp = max(0, new.bytesUp - prev.stats.bytesUp)
+        let dDown = max(0, new.bytesDown - prev.stats.bytesDown)
+        upRate = Double(dUp) / dt
+        downRate = Double(dDown) / dt
+    }
+
+    private func metric(systemImage: String, label: String, value: String, rate: Double) -> some View {
         HStack(spacing: 8) {
             Image(systemName: systemImage).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(label).font(.caption).foregroundStyle(.secondary)
                 Text(value).font(.body).monospacedDigit()
+                Text(rateText(rate))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
             }
         }
+    }
+
+    private func rateText(_ rate: Double) -> String {
+        let bytes = Int64(rate.rounded())
+        if bytes <= 0 { return "idle" }
+        return "\(Self.rateFormatter.string(fromByteCount: bytes))/s"
     }
 
     private func row(_ label: String, _ value: String) -> some View {
@@ -447,5 +548,82 @@ private struct TrafficCard: View {
             Text(value).monospacedDigit()
         }
         .font(.subheadline)
+    }
+}
+
+private struct ModeCard: View {
+    let mode: TunnelMode
+    let selected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(selected ? Color.accentColor : Color(.tertiarySystemFill))
+                        .frame(width: 40, height: 40)
+                    Image(systemName: mode.icon)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(selected ? Color.white : Color.secondary)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(mode.label)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(mode.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .font(.title3)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color(.secondarySystemBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(selected ? Color.accentColor : Color.clear, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct MissingFieldsCard: View {
+    let items: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "slider.horizontal.3")
+                    .foregroundStyle(.orange)
+                Text("Configuration needed")
+                    .font(.headline)
+                Spacer()
+            }
+            Text("Open Settings to fill in the following before connecting:")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(items, id: \.self) { item in
+                    HStack(spacing: 8) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 5))
+                            .foregroundStyle(.orange)
+                        Text(item).font(.subheadline)
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(Color.orange.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }

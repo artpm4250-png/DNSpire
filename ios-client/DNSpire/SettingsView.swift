@@ -71,7 +71,7 @@ struct SettingsView: View {
                     Text("DNS-over-TCP target the packet-tunnel extension shims UDP-53 onto. Use a resolver reachable through your DNS tunnel (e.g. 1.1.1.1:53, 8.8.8.8:53). Ignored in SOCKS5 proxy mode.")
                 }
 
-                Section("Performance") {
+                Section {
                     Picker("Resolving strategy", selection: $configStore.draft.resolverBalancingStrategy) {
                         ForEach(ResolverBalancingOption.allCases) { option in
                             Text(option.label).tag(option.rawValue)
@@ -87,37 +87,23 @@ struct SettingsView: View {
                             Text(option.label).tag(option.rawValue)
                         }
                     }
-                    Stepper("Compression min size: \(configStore.draft.compressionMinSize)",
-                            value: $configStore.draft.compressionMinSize,
-                            in: 100...65535,
-                            step: 50)
-                    Stepper("MTU retries: \(configStore.draft.mtuTestRetries)",
-                            value: $configStore.draft.mtuTestRetries,
-                            in: 1...10)
-                    LabeledContent("MTU timeout") {
-                        TextField("2.0", value: $configStore.draft.mtuTestTimeout, format: .number)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
+                } header: {
+                    Text("Performance")
+                } footer: {
+                    Text("Resolving strategy picks which DNS resolvers to send queries through. Compression is applied to tunnel payloads larger than the threshold in Advanced.")
+                }
+
+                Section {
+                    NavigationLink {
+                        AdvancedTuningView()
+                            .environmentObject(configStore)
+                    } label: {
+                        LabeledContent("Advanced tuning") {
+                            Text("MTU, ARQ, duplication")
+                                .foregroundStyle(.secondary)
+                                .font(.footnote)
+                        }
                     }
-                    Stepper("MTU parallelism: \(configStore.draft.mtuTestParallelism)",
-                            value: $configStore.draft.mtuTestParallelism,
-                            in: 1...128)
-                    Stepper("Packet duplication: \(configStore.draft.packetDuplicationCount)",
-                            value: $configStore.draft.packetDuplicationCount,
-                            in: 1...8)
-                    Stepper("Setup duplication: \(configStore.draft.setupPacketDuplicationCount)",
-                            value: $configStore.draft.setupPacketDuplicationCount,
-                            in: 1...8)
-                    Stepper("RX/TX workers: \(configStore.draft.rxTxWorkers)",
-                            value: $configStore.draft.rxTxWorkers,
-                            in: 1...32)
-                    Stepper("Batch size: \(configStore.draft.maxPacketsPerBatch)",
-                            value: $configStore.draft.maxPacketsPerBatch,
-                            in: 1...64)
-                    Stepper("ARQ window: \(configStore.draft.arqWindowSize)",
-                            value: $configStore.draft.arqWindowSize,
-                            in: 1...8000,
-                            step: 50)
                 }
 
                 Section("Logging") {
@@ -137,6 +123,105 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
         }
+    }
+}
+
+struct AdvancedTuningView: View {
+    @EnvironmentObject var configStore: ConfigStore
+
+    var body: some View {
+        Form {
+            Section {
+                Stepper(value: $configStore.draft.compressionMinSize, in: 100...65535, step: 50) {
+                    LabeledContent("Compression min size") {
+                        Text("\(configStore.draft.compressionMinSize) B")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+            } header: {
+                Text("Compression")
+            } footer: {
+                Text("Payloads smaller than this are sent uncompressed regardless of the chosen algorithm.")
+            }
+
+            Section {
+                Stepper(value: $configStore.draft.mtuTestRetries, in: 1...10) {
+                    LabeledContent("Probe retries") {
+                        Text("\(configStore.draft.mtuTestRetries)")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+                LabeledContent("Probe timeout") {
+                    TextField("2.0", value: $configStore.draft.mtuTestTimeout, format: .number)
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                }
+                Stepper(value: $configStore.draft.mtuTestParallelism, in: 1...128) {
+                    LabeledContent("Parallelism") {
+                        Text("\(configStore.draft.mtuTestParallelism)")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+            } header: {
+                Text("MTU probing")
+            } footer: {
+                Text("Discovery sweep run once per session to find the largest payload that survives the DNS path.")
+            }
+
+            Section {
+                Stepper(value: $configStore.draft.packetDuplicationCount, in: 1...8) {
+                    LabeledContent("Packet duplication") {
+                        Text("\(configStore.draft.packetDuplicationCount)×")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+                Stepper(value: $configStore.draft.setupPacketDuplicationCount, in: 1...8) {
+                    LabeledContent("Setup duplication") {
+                        Text("\(configStore.draft.setupPacketDuplicationCount)×")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+            } header: {
+                Text("Duplication")
+            } footer: {
+                Text("Each tunnel packet (and handshake packet) is sent N times. Higher values trade bandwidth for loss resilience.")
+            }
+
+            Section {
+                Stepper(value: $configStore.draft.rxTxWorkers, in: 1...32) {
+                    LabeledContent("RX/TX workers") {
+                        Text("\(configStore.draft.rxTxWorkers)")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+                Stepper(value: $configStore.draft.maxPacketsPerBatch, in: 1...64) {
+                    LabeledContent("Batch size") {
+                        Text("\(configStore.draft.maxPacketsPerBatch)")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+                Stepper(value: $configStore.draft.arqWindowSize, in: 1...8000, step: 50) {
+                    LabeledContent("ARQ window") {
+                        Text("\(configStore.draft.arqWindowSize)")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+            } header: {
+                Text("Concurrency & ARQ")
+            } footer: {
+                Text("Worker counts shape parallelism on the wire; ARQ window is the in-flight packet ceiling before the sender stalls.")
+            }
+        }
+        .navigationTitle("Advanced tuning")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
