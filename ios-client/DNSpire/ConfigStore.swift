@@ -98,6 +98,10 @@ struct ClientConfigDraft: Codable, Equatable {
     /// (DNS-over-TCP through SOCKS5). Ignored in local-proxy mode. Format:
     /// "host:port" or "[v6]:port".
     var systemVPNDNSResolver: String
+    /// HTTPS URL the packet-tunnel extension hits after `connected` to prove the
+    /// tunnel is actually carrying traffic. Must be `https://`; empty falls back
+    /// to the default. See [[whitedns-catchup-roadmap]] Stage 3.
+    var verifyURL: String
 
     static let `default` = ClientConfigDraft(
         domains: ["v.example.com"],
@@ -123,7 +127,8 @@ struct ClientConfigDraft: Codable, Equatable {
         rxTxWorkers: 4,
         maxPacketsPerBatch: 8,
         arqWindowSize: 600,
-        systemVPNDNSResolver: "1.1.1.1:53"
+        systemVPNDNSResolver: "1.1.1.1:53",
+        verifyURL: "https://1.1.1.1/cdn-cgi/trace"
     )
 
     enum CodingKeys: String, CodingKey {
@@ -134,6 +139,7 @@ struct ClientConfigDraft: Codable, Equatable {
         case packetDuplicationCount, setupPacketDuplicationCount
         case rxTxWorkers, maxPacketsPerBatch, arqWindowSize
         case systemVPNDNSResolver
+        case verifyURL
     }
 
     init(domains: [String],
@@ -159,7 +165,8 @@ struct ClientConfigDraft: Codable, Equatable {
          rxTxWorkers: Int,
          maxPacketsPerBatch: Int,
          arqWindowSize: Int,
-         systemVPNDNSResolver: String) {
+         systemVPNDNSResolver: String,
+         verifyURL: String) {
         self.domains = domains
         self.encryptionKey = encryptionKey
         self.dataEncryptionMethod = dataEncryptionMethod
@@ -184,6 +191,7 @@ struct ClientConfigDraft: Codable, Equatable {
         self.maxPacketsPerBatch = maxPacketsPerBatch
         self.arqWindowSize = arqWindowSize
         self.systemVPNDNSResolver = systemVPNDNSResolver
+        self.verifyURL = verifyURL
     }
 
     init(from decoder: Decoder) throws {
@@ -216,6 +224,7 @@ struct ClientConfigDraft: Codable, Equatable {
         maxPacketsPerBatch = try container.decodeIfPresent(Int.self, forKey: .maxPacketsPerBatch) ?? fallback.maxPacketsPerBatch
         arqWindowSize = try container.decodeIfPresent(Int.self, forKey: .arqWindowSize) ?? fallback.arqWindowSize
         systemVPNDNSResolver = try container.decodeIfPresent(String.self, forKey: .systemVPNDNSResolver) ?? fallback.systemVPNDNSResolver
+        verifyURL = try container.decodeIfPresent(String.self, forKey: .verifyURL) ?? fallback.verifyURL
     }
 }
 
@@ -421,6 +430,16 @@ final class ConfigStore: ObservableObject {
     func normalizedSystemVPNDNSResolver() -> String {
         let v = draft.systemVPNDNSResolver.trimmingCharacters(in: .whitespacesAndNewlines)
         return v.isEmpty ? "1.1.1.1:53" : v
+    }
+
+    /// Verify URL passed to the packet-tunnel extension. Falls back to the
+    /// default if blank or not an `https://` URL.
+    func normalizedVerifyURL() -> String {
+        let v = draft.verifyURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !v.isEmpty, let parsed = URL(string: v), parsed.scheme == "https" else {
+            return "https://1.1.1.1/cdn-cgi/trace"
+        }
+        return v
     }
 
     // Validators are `nonisolated` because they touch no instance state and

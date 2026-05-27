@@ -6,6 +6,17 @@ enum VPNStatus: String {
     case unknown, disabled, connecting, connected, reasserting, disconnecting, disconnected
 }
 
+/// Post-connect verification state derived from the packet-tunnel extension's
+/// `Verifier` snapshot. `.idle` means the verifier hasn't run yet for this
+/// session — either we never reached `connected`, or we disconnected. Set by
+/// [[VPNManager]] from each polled [[ProviderSnapshot]].
+enum VerificationState: Equatable {
+    case idle
+    case verifying
+    case verified(at: Date)
+    case needsAttention
+}
+
 /// Snapshot of the runtime state inside the packet-tunnel extension, drained
 /// once per second while the tunnel is active.
 struct VPNStats: Equatable {
@@ -14,6 +25,8 @@ struct VPNStats: Equatable {
     var tcpFlowsActive: Int64 = 0
     var tcpFlowsAccepted: Int64 = 0
     var dnsQueriesHandled: Int64 = 0
+    var resolversTotal: Int = 0
+    var resolversActive: Int = 0
 }
 
 /// VPNManager wraps NETunnelProviderManager: it installs the system VPN
@@ -27,6 +40,10 @@ final class VPNManager: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var goStatus: String = ""
     @Published private(set) var stats: VPNStats = .init()
+    /// Live verification state pulled off the extension snapshot. `.idle` until
+    /// the packet tunnel reaches `connected` for the first time, and reset to
+    /// `.idle` on disconnect / removeProfile.
+    @Published private(set) var verification: VerificationState = .idle
     /// Timestamp of the last successfully-decoded snapshot from the packet-tunnel
     /// extension. Nil between connects. Surfaced in the TrafficCard footer so a
     /// frozen card immediately tells the user whether IPC is dead or the
@@ -83,7 +100,7 @@ final class VPNManager: ObservableObject {
 
     /// Install the profile (creating it on first run; updating providerConfig
     /// on subsequent runs) and start the tunnel.
-    func connect(configJSON: String, resolversText: String, dnsResolver: String) async {
+    func connect(configJSON: String, resolversText: String, dnsResolver: String, verifyURL: String) async {
         do {
             let mgr = manager ?? NETunnelProviderManager()
 
@@ -93,7 +110,8 @@ final class VPNManager: ObservableObject {
             proto.providerConfiguration = [
                 "configJSON": configJSON,
                 "resolversText": resolversText,
-                "dnsResolver": dnsResolver
+                "dnsResolver": dnsResolver,
+                "verifyURL": verifyURL
             ]
             mgr.protocolConfiguration = proto
             mgr.localizedDescription = "DNSpire"
@@ -108,6 +126,7 @@ final class VPNManager: ObservableObject {
             self.observeStatusChanges(mgr)
             self.lastLogSeq = 0
             self.stats = .init()
+            self.verification = .idle
             self.lastSnapshotAt = nil
             self.firstSnapshotLogged = false
             self.ipcMissStreak = 0
@@ -123,6 +142,21 @@ final class VPNManager: ObservableObject {
         manager?.connection.stopVPNTunnel()
     }
 
+    /// Ask the extension to re-run the post-connect HTTPS probe. No-op if the
+    /// tunnel isn't up. Used by the "tap to retry" affordance in
+    /// [[ConnectionView]]'s VPNBadge when verification settles in
+    /// `.needsAttention`.
+    func requestReverify() {
+        guard let session = manager?.connection as? NETunnelProviderSession else { return }
+        let req = ProviderRequest(op: "reverify", sinceLogSeq: lastLogSeq)
+        guard let body = try? JSONEncoder().encode(req) else { return }
+        try? session.sendProviderMessage(body) { [weak self] data in
+            guard let self, let data,
+                  let decoded = try? JSONDecoder().decode(ProviderSnapshot.self, from: data) else { return }
+            Task { @MainActor in self.apply(decoded) }
+        }
+    }
+
     /// Remove the VPN profile entirely (the user can also do this from
     /// Settings → VPN). Useful when the user wants to revoke permission.
     func removeProfile() async {
@@ -134,6 +168,7 @@ final class VPNManager: ObservableObject {
             self.status = .disabled
             self.goStatus = ""
             self.stats = .init()
+            self.verification = .idle
             self.lastSnapshotAt = nil
             self.firstSnapshotLogged = false
             self.ipcMissStreak = 0
@@ -181,6 +216,7 @@ final class VPNManager: ObservableObject {
             if status == .disconnected || status == .disabled {
                 goStatus = ""
                 stats = .init()
+                verification = .idle
                 lastLogSeq = 0
                 lastSnapshotAt = nil
                 firstSnapshotLogged = false
@@ -260,8 +296,11 @@ final class VPNManager: ObservableObject {
             bytesDown: snapshot.bytesDown,
             tcpFlowsActive: snapshot.tcpFlowsActive,
             tcpFlowsAccepted: snapshot.tcpFlowsAccepted,
-            dnsQueriesHandled: snapshot.dnsQueriesHandled
+            dnsQueriesHandled: snapshot.dnsQueriesHandled,
+            resolversTotal: snapshot.resolversTotal,
+            resolversActive: snapshot.resolversActive
         )
+        verification = mapVerification(snapshot.verification, lastVerifiedAtMs: snapshot.lastVerifiedAt)
         if snapshot.lastLogSeq > lastLogSeq {
             lastLogSeq = snapshot.lastLogSeq
         }
@@ -281,6 +320,22 @@ final class VPNManager: ObservableObject {
         }
         if snapshot.status.hasPrefix("error:"), lastError == nil {
             lastError = String(snapshot.status.dropFirst("error:".count))
+        }
+    }
+
+    private func mapVerification(_ raw: String, lastVerifiedAtMs: Int64) -> VerificationState {
+        switch raw {
+        case "verifying":
+            return .verifying
+        case "verified":
+            let when = lastVerifiedAtMs > 0
+                ? Date(timeIntervalSince1970: TimeInterval(lastVerifiedAtMs) / 1000.0)
+                : Date()
+            return .verified(at: when)
+        case "needsAttention":
+            return .needsAttention
+        default:
+            return .idle
         }
     }
 }

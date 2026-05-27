@@ -16,6 +16,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let stateLock = NSLock()
     private var latestStatus: String = "stopped"
     private let logRing = LogRing(capacity: 500)
+    private var verifier: Verifier?
 
     override func startTunnel(options: [String: NSObject]?,
                               completionHandler: @escaping (Error?) -> Void) {
@@ -34,6 +35,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         let resolversText = (providerConfig["resolversText"] as? String) ?? ""
         let dnsResolver = (providerConfig["dnsResolver"] as? String) ?? "1.1.1.1:53"
+        let verifyURL = providerConfig["verifyURL"] as? String
+
+        let v = Verifier(verifyURLString: verifyURL) { [weak self] line in
+            self?.logRing.append(line)
+        }
+        verifier = v
 
         let pt = DNSpireMobileNewPacketTunnel()!
         pt.setLogCallback(LogSink { [weak self] line in
@@ -91,6 +98,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                              completionHandler: @escaping () -> Void) {
         os_log("stopTunnel reason=%d", log: log, type: .info, reason.rawValue)
         running = false
+        verifier?.stop()
+        verifier = nil
         try? packetTunnel?.stop()
         packetTunnel = nil
         recordStatus("stopped")
@@ -104,6 +113,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                                    completionHandler: ((Data?) -> Void)?) {
         let request = (try? JSONDecoder().decode(ProviderRequest.self, from: messageData))
             ?? ProviderRequest(op: "snapshot", sinceLogSeq: 0)
+        if request.op == "reverify" {
+            verifier?.reverify()
+        }
         let snapshot = buildSnapshot(sinceLogSeq: request.sinceLogSeq ?? 0)
         let data = (try? JSONEncoder().encode(snapshot)) ?? Data()
         completionHandler?(data)
@@ -115,6 +127,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         stateLock.lock()
         let status = latestStatus
         stateLock.unlock()
+        let v = verifier?.snapshot() ?? (state: "", lastVerifiedAt: Int64(0))
         return ProviderSnapshot(
             status: status,
             bytesUp: pt?.bytesUp() ?? 0,
@@ -123,14 +136,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             tcpFlowsActive: pt?.tcpFlowsActive() ?? 0,
             dnsQueriesHandled: pt?.dnsQueriesHandled() ?? 0,
             logs: drained.entries,
-            lastLogSeq: drained.lastSeq
+            lastLogSeq: drained.lastSeq,
+            verification: v.state,
+            lastVerifiedAt: v.lastVerifiedAt,
+            resolversTotal: pt?.resolversTotal() ?? 0,
+            resolversActive: pt?.resolversActive() ?? 0
         )
     }
 
     private func recordStatus(_ state: String) {
         stateLock.lock()
+        let prev = latestStatus
         latestStatus = state
         stateLock.unlock()
+        if prev == state {
+            return
+        }
+        if state == "connected" {
+            verifier?.tunnelDidConnect()
+        } else if prev == "connected" {
+            verifier?.tunnelDidDisconnect()
+        }
     }
 
     /// NEPacketTunnelNetworkSettings: claim a default route, set DNS to a

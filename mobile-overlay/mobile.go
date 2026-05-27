@@ -105,6 +105,42 @@ func (t *Tunnel) LastStatus() string {
 	return t.lastStatus
 }
 
+// ResolversTotal returns the configured resolver count seen by the balancer,
+// or 0 when no client is bootstrapped (pre-Start / post-Stop). Safe for
+// concurrent callers — snapshots t.app under t.mu and calls the Balancer
+// outside the lock so we never hold both ours and the balancer's mutex at
+// once.
+func (t *Tunnel) ResolversTotal() int {
+	t.mu.Lock()
+	app := t.app
+	t.mu.Unlock()
+	if app == nil {
+		return 0
+	}
+	b := app.Balancer()
+	if b == nil {
+		return 0
+	}
+	return b.TotalCount()
+}
+
+// ResolversActive returns the number of resolvers the balancer is currently
+// keeping in rotation. 0 before bootstrap and during early MTU bisect (no
+// connection has flipped to valid yet).
+func (t *Tunnel) ResolversActive() int {
+	t.mu.Lock()
+	app := t.app
+	t.mu.Unlock()
+	if app == nil {
+		return 0
+	}
+	b := app.Balancer()
+	if b == nil {
+		return 0
+	}
+	return b.ActiveCount()
+}
+
 // Start launches the upstream client using the provided JSON config blob (same
 // schema as the JSON form of client_config in the upstream repo) plus a plain
 // resolvers list (one entry per line, "IP" or "IP:PORT", same format as

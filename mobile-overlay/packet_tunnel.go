@@ -140,6 +140,14 @@ func (pt *PacketTunnel) TCPFlowsActive() int64 { return pt.tcpFlowsActive.Load()
 // DNS-over-TCP shim successfully resolved upstream.
 func (pt *PacketTunnel) DNSQueriesHandled() int64 { return pt.dnsQueriesHandled.Load() }
 
+// ResolversTotal forwards to the inner Tunnel's balancer-derived total
+// resolver count. 0 before bootstrap.
+func (pt *PacketTunnel) ResolversTotal() int { return pt.tunnel.ResolversTotal() }
+
+// ResolversActive forwards to the inner Tunnel's balancer-derived active
+// (in-rotation) resolver count.
+func (pt *PacketTunnel) ResolversActive() int { return pt.tunnel.ResolversActive() }
+
 // LastStatus returns the most recent status string emitted by the inner
 // Tunnel (e.g. "mtu_testing", "connected", "error:..."). Empty before
 // Start.

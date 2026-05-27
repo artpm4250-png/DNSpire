@@ -205,7 +205,8 @@ struct ConnectionView: View {
                 }
                 let resolvers = configStore.encodedResolversText()
                 let dns = configStore.normalizedSystemVPNDNSResolver()
-                Task { await vpn.connect(configJSON: json, resolversText: resolvers, dnsResolver: dns) }
+                let verifyURL = configStore.normalizedVerifyURL()
+                Task { await vpn.connect(configJSON: json, resolversText: resolvers, dnsResolver: dns, verifyURL: verifyURL) }
             }
         } label: {
             Text(active ? "Disconnect" : "Enable System VPN")
