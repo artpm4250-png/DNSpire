@@ -54,7 +54,12 @@ struct ConnectionView: View {
                         )
                             .padding(.top, 8)
                     } else {
-                        VPNBadge(status: vpn.status, goStatus: vpn.goStatus)
+                        VPNBadge(
+                            status: vpn.status,
+                            goStatus: vpn.goStatus,
+                            verification: vpn.verification,
+                            onRetryTap: { vpn.requestReverify() }
+                        )
                             .padding(.top, 8)
                     }
 
@@ -73,6 +78,11 @@ struct ConnectionView: View {
                     }
 
                     if mode == .systemVPN, vpn.status == .connected || vpn.status == .reasserting {
+                        ResolverStatePane(
+                            total: vpn.stats.resolversTotal,
+                            active: vpn.stats.resolversActive,
+                            goStatus: vpn.goStatus
+                        )
                         TrafficCard(stats: vpn.stats, lastSnapshotAt: vpn.lastSnapshotAt)
                     }
 
@@ -293,6 +303,12 @@ private struct StatusBadge: View {
 private struct VPNBadge: View {
     let status: VPNStatus
     let goStatus: String
+    let verification: VerificationState
+    let onRetryTap: () -> Void
+
+    /// Heartbeat for the "Verified · Xs ago" relative-time string; otherwise
+    /// the line would freeze on whatever the apply() snapshot saw.
+    @State private var now: Date = Date()
 
     var body: some View {
         VStack(spacing: 8) {
@@ -317,6 +333,15 @@ private struct VPNBadge: View {
                 )
             Text(label).font(.headline)
             Text(detail).font(.caption).foregroundStyle(.secondary)
+            if let chip = verificationChip {
+                chip
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                now = Date()
+            }
         }
     }
 
@@ -367,6 +392,116 @@ private struct VPNBadge: View {
         case .connected:                                                 return "checkmark"
         case .connecting, .reasserting, .disconnecting:                  return "arrow.triangle.2.circlepath"
         default:                                                         return "bolt.slash.fill"
+        }
+    }
+
+    @ViewBuilder
+    private var verificationChip: some View {
+        switch verification {
+        case .idle:
+            EmptyView()
+        case .verifying:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Verifying…").font(.caption2).foregroundStyle(.orange)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(Color.orange.opacity(0.12))
+            .clipShape(Capsule())
+        case .verified(let at):
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.caption2).foregroundStyle(.green)
+                Text("Verified · \(relativeAge(of: at))")
+                    .font(.caption2).foregroundStyle(.green)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(Color.green.opacity(0.12))
+            .clipShape(Capsule())
+        case .needsAttention:
+            Button(action: onRetryTap) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2).foregroundStyle(.red)
+                    Text("Probe failed — tap to retry")
+                        .font(.caption2).foregroundStyle(.red)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(Color.red.opacity(0.12))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func relativeAge(of date: Date) -> String {
+        let s = max(0, Int(now.timeIntervalSince(date).rounded()))
+        if s < 1 { return "just now" }
+        if s < 60 { return "\(s)s ago" }
+        let m = s / 60
+        if m < 60 { return "\(m)m ago" }
+        let h = m / 60
+        return "\(h)h ago"
+    }
+}
+
+private struct ResolverStatePane: View {
+    let total: Int
+    let active: Int
+    let goStatus: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: "antenna.radiowaves.left.and.right").font(.title2)
+                Text("Resolvers").font(.headline)
+                Spacer()
+                if total == 0 {
+                    Text("loading…").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Divider()
+            HStack(spacing: 20) {
+                stat(color: .green, symbol: "circle.fill", label: "active", value: active)
+                stat(color: .secondary, symbol: "circle", label: inactiveLabel, value: inactive)
+                if pending > 0 {
+                    stat(color: .orange, symbol: "ellipsis.circle", label: "pending", value: pending)
+                }
+                Spacer()
+            }
+        }
+        .padding()
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// During `mtu_testing` the balancer hasn't decided which resolvers will be
+    /// in rotation yet — we surface those as "pending" rather than misleadingly
+    /// labelling them inactive. Once the upstream loop settles, leftover slots
+    /// are genuinely disabled and slot into `inactive`.
+    private var pending: Int {
+        let go = goStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+        if go == "mtu_testing" || go == "session_init" || go == "starting" {
+            return max(0, total - active)
+        }
+        return 0
+    }
+
+    private var inactive: Int {
+        max(0, total - active - pending)
+    }
+
+    private var inactiveLabel: String {
+        inactive == 1 ? "inactive" : "inactive"
+    }
+
+    private func stat(color: Color, symbol: String, label: String, value: Int) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.caption)
+                .foregroundStyle(color)
+            Text("\(value)").font(.body).monospacedDigit()
+            Text(label).font(.caption).foregroundStyle(.secondary)
         }
     }
 }

@@ -7,6 +7,15 @@ struct SettingsView: View {
 
     @State private var showRemoveProfileAlert = false
 
+    private var isValidVerifyURL: Bool {
+        let v = configStore.draft.verifyURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if v.isEmpty { return true }
+        guard let parsed = URL(string: v), parsed.scheme == "https", parsed.host?.isEmpty == false else {
+            return false
+        }
+        return true
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -72,6 +81,13 @@ struct SettingsView: View {
                         error: ConfigStore.validateHostPort(configStore.draft.systemVPNDNSResolver)
                             ? nil : "Expected host:port (e.g. 1.1.1.1:53 or [::1]:53)"
                     )
+                    ValidatedTextRow(
+                        label: "Verify URL",
+                        placeholder: "https://1.1.1.1/cdn-cgi/trace",
+                        text: $configStore.draft.verifyURL,
+                        keyboard: .URL,
+                        error: isValidVerifyURL ? nil : "Must be an https:// URL"
+                    )
                     if vpn.profileInstalled {
                         Button(role: .destructive) {
                             showRemoveProfileAlert = true
@@ -82,7 +98,7 @@ struct SettingsView: View {
                 } header: {
                     Text("System VPN")
                 } footer: {
-                    Text("DNS-over-TCP target the packet-tunnel extension shims UDP-53 onto. Use a resolver reachable through your DNS tunnel (e.g. 1.1.1.1:53, 8.8.8.8:53). Ignored in SOCKS5 proxy mode.")
+                    Text("DNS-over-TCP target the packet-tunnel extension shims UDP-53 onto. Use a resolver reachable through your DNS tunnel (e.g. 1.1.1.1:53, 8.8.8.8:53). Ignored in SOCKS5 proxy mode. Verify URL is the HTTPS endpoint the extension hits after connecting to confirm end-to-end data flow.")
                 }
 
                 Section {
