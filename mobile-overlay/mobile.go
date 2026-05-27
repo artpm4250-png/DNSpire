@@ -478,6 +478,87 @@ func EncodeConfigBase64(configJSON string) string {
 	return base64.StdEncoding.EncodeToString([]byte(configJSON))
 }
 
+// ProbeServer runs a one-shot handshake against the server described by
+// configJSON + resolversText: BootstrapLoadedConfig → RunInitialMTUTests →
+// InitializeSession, all under a single ctx-with-timeout, then tears down.
+//
+// Unlike Tunnel.Start, the probe:
+//   - never opens the SOCKS5 listener (does not call StartAsyncRuntime),
+//   - never hijacks os.Stdout / os.Stderr (so it co-exists with a live tunnel
+//     whose log pipe is currently installed),
+//   - never spawns any goroutine that outlives the call.
+//
+// On success returns the elapsed wall-clock time from start to "session
+// ready" in milliseconds. On failure returns 0 and an error whose
+// Error() string is prefixed with a category — "timeout", "mtu",
+// "handshake", "config:..." — so Swift can render it without parsing
+// free-form text. scratchDir is wiped on return.
+func ProbeServer(configJSON, resolversText, scratchDir string, timeoutMs int) (int64, error) {
+	if scratchDir == "" {
+		return 0, errors.New("config:scratchDir is required")
+	}
+	if err := os.MkdirAll(scratchDir, 0o755); err != nil {
+		return 0, fmt.Errorf("config:scratchDir: %w", err)
+	}
+	defer os.RemoveAll(scratchDir)
+
+	resolverPath := ""
+	if resolversText != "" {
+		resolverPath = filepath.Join(scratchDir, "client_resolvers.txt")
+		if err := os.WriteFile(resolverPath, []byte(resolversText), 0o644); err != nil {
+			return 0, fmt.Errorf("config:write resolvers: %w", err)
+		}
+	}
+
+	cfg, err := loadConfigFromJSON(configJSON, resolverPath)
+	if err != nil {
+		return 0, fmt.Errorf("config:%s", err.Error())
+	}
+	// Force-quiet the probe logger so it doesn't pollute the (stdout-capturing)
+	// log pipe of a tunnel that might be running concurrently. Errors still
+	// surface via the returned error.
+	cfg.LogLevel = "ERROR"
+
+	if timeoutMs <= 0 {
+		timeoutMs = 20_000
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+
+	app, err := client.BootstrapLoadedConfig(cfg, "")
+	if err != nil {
+		return 0, fmt.Errorf("config:%s", err.Error())
+	}
+
+	if err := app.RunInitialMTUTests(ctx); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return 0, errors.New("timeout")
+		}
+		if errors.Is(err, client.ErrNoValidConnections) {
+			return 0, errors.New("mtu")
+		}
+		return 0, fmt.Errorf("mtu:%s", err.Error())
+	}
+	// RunInitialMTUTests honours ctx by returning nil on cancel — re-check.
+	if ctx.Err() == context.DeadlineExceeded {
+		return 0, errors.New("timeout")
+	}
+
+	if err := app.InitializeSession(1); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return 0, errors.New("timeout")
+		}
+		if errors.Is(err, client.ErrNoValidConnections) {
+			return 0, errors.New("mtu")
+		}
+		return 0, errors.New("handshake")
+	}
+
+	return time.Since(start).Milliseconds(), nil
+}
+
 // Version returns the mobile-binding version tag. Independent of the upstream
 // Go client version (which it pins via go.mod).
 const Version = "ios-mobile-0.1.0"

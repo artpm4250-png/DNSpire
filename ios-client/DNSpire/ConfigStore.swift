@@ -351,19 +351,44 @@ final class ConfigStore: ObservableObject {
     /// Serialize the draft into the JSON shape the upstream Go client expects
     /// (TOML key names, uppercase). Returns nil if required fields are missing.
     func encodedConfigJSON() -> String? {
-        let cleanedDomains = draft.domains
+        encodedConfigJSON(
+            domainsSource: draft.domains,
+            encryptionKeySource: draft.encryptionKey,
+            dataEncryptionMethodSource: draft.dataEncryptionMethod
+        )
+    }
+
+    /// Probe-side variant: same upstream JSON, but server identity (domains,
+    /// encryption key, encryption method) comes from a passed [[ServerProfile]]
+    /// instead of the live draft. Everything else — resolvers, listener,
+    /// compression, MTU knobs — still comes from the draft so the probe
+    /// measures the user's *current tuning* against a candidate server.
+    func encodedConfigJSON(serverOverride server: ServerProfile) -> String? {
+        encodedConfigJSON(
+            domainsSource: server.domains,
+            encryptionKeySource: server.encryptionKey,
+            dataEncryptionMethodSource: server.dataEncryptionMethod
+        )
+    }
+
+    private func encodedConfigJSON(
+        domainsSource: [String],
+        encryptionKeySource: String,
+        dataEncryptionMethodSource: Int
+    ) -> String? {
+        let cleanedDomains = domainsSource
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         guard !cleanedDomains.isEmpty else { return nil }
-        guard !draft.encryptionKey.isEmpty else { return nil }
+        guard !encryptionKeySource.isEmpty else { return nil }
 
         // The Go config struct uses uppercase TOML tags (DOMAINS, ENCRYPTION_KEY,
         // ...). The JSON loader honours those same tags. See upstream:
         // internal/config/json_config.go decodeConfigJSONInto.
         let dict: [String: Any] = [
             "DOMAINS": cleanedDomains,
-            "ENCRYPTION_KEY": draft.encryptionKey,
-            "DATA_ENCRYPTION_METHOD": draft.dataEncryptionMethod,
+            "ENCRYPTION_KEY": encryptionKeySource,
+            "DATA_ENCRYPTION_METHOD": dataEncryptionMethodSource,
             "PROTOCOL_TYPE": draft.protocolType,
             "LISTEN_IP": draft.listenIP,
             "LISTEN_PORT": draft.listenPort,

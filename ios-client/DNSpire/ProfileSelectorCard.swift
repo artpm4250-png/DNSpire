@@ -114,6 +114,7 @@ struct ProfileSliceSheet: View {
     @State private var renameText: String = ""
     @State private var shareLink: ShareLinkItem?
     @State private var importing = false
+    @StateObject private var testRunner = ServerTestRunner()
 
     private struct ShareLinkItem: Identifiable {
         let id = UUID()
@@ -141,6 +142,18 @@ struct ProfileSliceSheet: View {
                         Label("Rename active", systemImage: "pencil")
                     }
                     if slice == .server {
+                        Button {
+                            Task {
+                                await testRunner.testAll(
+                                    servers: profileStore.servers,
+                                    configStore: configStore
+                                )
+                            }
+                        } label: {
+                            Label(testRunner.isRunning ? "Testing…" : "Test all",
+                                  systemImage: "speedometer")
+                        }
+                        .disabled(testRunner.isRunning)
                         Button {
                             exportActiveServer()
                         } label: {
@@ -242,10 +255,50 @@ struct ProfileSliceSheet: View {
                 Text(name)
                     .foregroundStyle(.primary)
                 Spacer()
+                if slice == .server, let outcome = testRunner.outcomes[id] {
+                    outcomeBadge(outcome)
+                }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func outcomeBadge(_ outcome: ServerTestRunner.Outcome) -> some View {
+        switch outcome {
+        case .pending:
+            Circle()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(width: 6, height: 6)
+        case .running:
+            ProgressView()
+                .controlSize(.mini)
+        case .ok(let ms):
+            Text("\(ms) ms")
+                .font(.caption.monospacedDigit())
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.green.opacity(0.15))
+                .foregroundStyle(.green)
+                .clipShape(Capsule())
+        case .timeout:
+            Text("timeout")
+                .font(.caption)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.orange.opacity(0.15))
+                .foregroundStyle(.orange)
+                .clipShape(Capsule())
+        case .fail(let reason):
+            Text(reason)
+                .font(.caption)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.red.opacity(0.15))
+                .foregroundStyle(.red)
+                .clipShape(Capsule())
+        }
     }
 
     private func performSwitch(to id: UUID) {
