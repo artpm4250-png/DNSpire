@@ -333,9 +333,7 @@ private struct VPNBadge: View {
                 )
             Text(label).font(.headline)
             Text(detail).font(.caption).foregroundStyle(.secondary)
-            if let chip = verificationChip {
-                chip
-            }
+            verificationChip
         }
         .task {
             while !Task.isCancelled {
