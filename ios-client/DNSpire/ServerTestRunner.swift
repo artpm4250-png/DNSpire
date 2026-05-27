@@ -145,7 +145,7 @@ final class ServerTestRunner: ObservableObject {
         }.value
     }
 
-    private static func categorize(_ error: Error) -> Outcome {
+    nonisolated private static func categorize(_ error: Error) -> Outcome {
         let msg = (error as NSError).localizedDescription
         // The Go side prefixes errors with a one-word category before any
         // colon — see mobile-overlay/mobile.go:ProbeServer.
