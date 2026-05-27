@@ -23,6 +23,14 @@ enum ProfileSliceKind: String, Identifiable {
         case .tuning:   return "Tuning"
         }
     }
+
+    var icon: String {
+        switch self {
+        case .server:   return "server.rack"
+        case .resolver: return "antenna.radiowaves.left.and.right"
+        case .tuning:   return "slider.horizontal.3"
+        }
+    }
 }
 
 /// Replaces the old static "Configuration" summary in ConnectionView with a
@@ -38,6 +46,8 @@ struct ProfileSelectorCard: View {
     var body: some View {
         let divergence = profileStore.divergence(from: configStore.draft)
         VStack(spacing: 0) {
+            header
+            divider
             row(.server,
                 name: profileStore.activeServer.name,
                 modified: divergence.server)
@@ -59,6 +69,22 @@ struct ProfileSelectorCard: View {
         }
     }
 
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "tray.full")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text("Active profiles")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+    }
+
     private var divider: some View {
         Divider().padding(.leading, 14)
     }
@@ -67,16 +93,23 @@ struct ProfileSelectorCard: View {
         Button {
             presented = kind
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: kind.icon)
+                    .font(.subheadline)
+                    .foregroundStyle(.tint)
+                    .frame(width: 22)
                 Text(kind.label)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text(name)
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 if modified {
-                    Text("(modified)")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                    Circle()
+                        .fill(Color.orange)
+                        .frame(width: 6, height: 6)
+                        .accessibilityLabel("modified")
                 }
                 Image(systemName: "chevron.right")
                     .font(.caption)
@@ -84,7 +117,7 @@ struct ProfileSelectorCard: View {
             }
             .font(.subheadline)
             .padding(.horizontal, 14)
-            .padding(.vertical, 14)
+            .padding(.vertical, 12)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

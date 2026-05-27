@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum TunnelMode: String, CaseIterable, Identifiable {
     case proxy, systemVPN
@@ -14,8 +15,8 @@ enum TunnelMode: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .proxy:     return "Local listener at 127.0.0.1 — point apps at it manually."
-        case .systemVPN: return "Captures all traffic through the iOS Network Extension."
+        case .proxy:     return "Local SOCKS5 listener — point apps at it manually."
+        case .systemVPN: return "All device traffic through the Network Extension."
         }
     }
 
@@ -43,7 +44,7 @@ struct ConnectionView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 24) {
+                VStack(spacing: 18) {
                     modePicker
 
                     if mode == .proxy {
@@ -52,7 +53,7 @@ struct ConnectionView: View {
                             detail: tunnel.statusDetail,
                             isProxyReady: tunnel.isProxyReady
                         )
-                            .padding(.top, 8)
+                            .padding(.top, 4)
                     } else {
                         VPNBadge(
                             status: vpn.status,
@@ -60,7 +61,7 @@ struct ConnectionView: View {
                             verification: vpn.verification,
                             onRetryTap: { vpn.requestReverify() }
                         )
-                            .padding(.top, 8)
+                            .padding(.top, 4)
                     }
 
                     if !isCurrentlyRunning {
@@ -78,12 +79,11 @@ struct ConnectionView: View {
                     }
 
                     if mode == .systemVPN, vpn.status == .connected || vpn.status == .reasserting {
-                        ResolverStatePane(
-                            total: vpn.stats.resolversTotal,
-                            active: vpn.stats.resolversActive,
-                            goStatus: vpn.goStatus
+                        LiveTunnelCard(
+                            stats: vpn.stats,
+                            goStatus: vpn.goStatus,
+                            lastSnapshotAt: vpn.lastSnapshotAt
                         )
-                        TrafficCard(stats: vpn.stats, lastSnapshotAt: vpn.lastSnapshotAt)
                     }
 
                     if let err = currentError {
@@ -92,7 +92,7 @@ struct ConnectionView: View {
 
                     ProfileSelectorCard()
 
-                    Spacer(minLength: 24)
+                    Spacer(minLength: 16)
                 }
                 .padding(.horizontal)
             }
@@ -147,24 +147,31 @@ struct ConnectionView: View {
     }
 
     private var modePicker: some View {
-        VStack(spacing: 10) {
-            ForEach(TunnelMode.allCases) { m in
-                ModeCard(
-                    mode: m,
-                    selected: mode == m,
-                    locked: isAnyTunnelBusy && mode != m
-                ) {
-                    guard !isAnyTunnelBusy else { return }
-                    modeRaw = m.rawValue
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                ForEach(TunnelMode.allCases) { m in
+                    ModeSegment(
+                        mode: m,
+                        selected: mode == m,
+                        locked: isAnyTunnelBusy && mode != m
+                    ) {
+                        guard !isAnyTunnelBusy else { return }
+                        modeRaw = m.rawValue
+                    }
                 }
             }
-            if isAnyTunnelBusy {
-                Text("Disconnect to switch modes.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+            .padding(4)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.tertiarySystemFill))
+            )
+            Text(isAnyTunnelBusy ? "Disconnect to switch modes." : mode.subtitle)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
-        .padding(.top, 16)
+        .padding(.top, 12)
     }
 
     @ViewBuilder
@@ -193,9 +200,10 @@ struct ConnectionView: View {
             Text(isRunning ? "Disconnect" : "Connect")
                 .font(.headline)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
+                .padding(.vertical, 12)
         }
         .buttonStyle(.borderedProminent)
+        .controlSize(.large)
         .tint(isRunning ? .red : .accentColor)
         .disabled(!isRunning && !canConnect)
     }
@@ -222,9 +230,10 @@ struct ConnectionView: View {
             Text(active ? "Disconnect" : "Enable System VPN")
                 .font(.headline)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
+                .padding(.vertical, 12)
         }
         .buttonStyle(.borderedProminent)
+        .controlSize(.large)
         .tint(active ? .red : .accentColor)
         .disabled(!active && !canConnect)
     }
@@ -240,14 +249,14 @@ private struct StatusBadge: View {
         VStack(spacing: 8) {
             Circle()
                 .fill(color)
-                .frame(width: 64, height: 64)
+                .frame(width: 56, height: 56)
                 .overlay(
                     Image(systemName: icon)
-                        .font(.title)
+                        .font(.title2)
                         .foregroundStyle(.white)
                 )
                 .overlay(
-                    Circle().stroke(color.opacity(0.3), lineWidth: 8)
+                    Circle().stroke(color.opacity(0.3), lineWidth: 6)
                         .scaleEffect(isProxyReady ? 1.2 : 1.0)
                         .opacity(isProxyReady ? 0.0 : 0.6)
                         .animation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true),
@@ -314,14 +323,14 @@ private struct VPNBadge: View {
         VStack(spacing: 8) {
             Circle()
                 .fill(color)
-                .frame(width: 64, height: 64)
+                .frame(width: 56, height: 56)
                 .overlay(
                     Image(systemName: icon)
-                        .font(.title)
+                        .font(.title2)
                         .foregroundStyle(.white)
                 )
                 .overlay(
-                    Circle().stroke(color.opacity(0.35), lineWidth: 8)
+                    Circle().stroke(color.opacity(0.35), lineWidth: 6)
                         .scaleEffect(isInFlight ? 1.25 : 1.0)
                         .opacity(isInFlight ? 0.0 : 0.6)
                         .animation(
@@ -449,28 +458,17 @@ private struct ResolverStatePane: View {
     let goStatus: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                Image(systemName: "antenna.radiowaves.left.and.right").font(.title2)
-                Text("Resolvers").font(.headline)
-                Spacer()
-                if total == 0 {
-                    Text("loading…").font(.caption).foregroundStyle(.secondary)
-                }
+        HStack(spacing: 14) {
+            chip(color: .green, label: "active", value: active)
+            chip(color: .secondary, label: "inactive", value: inactive)
+            if pending > 0 {
+                chip(color: .orange, label: "pending", value: pending)
             }
-            Divider()
-            HStack(spacing: 20) {
-                stat(color: .green, symbol: "circle.fill", label: "active", value: active)
-                stat(color: .secondary, symbol: "circle", label: inactiveLabel, value: inactive)
-                if pending > 0 {
-                    stat(color: .orange, symbol: "ellipsis.circle", label: "pending", value: pending)
-                }
-                Spacer()
+            Spacer(minLength: 0)
+            if total == 0 {
+                Text("loading…").font(.caption2).foregroundStyle(.tertiary)
             }
         }
-        .padding()
-        .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     /// During `mtu_testing` the balancer hasn't decided which resolvers will be
@@ -489,17 +487,11 @@ private struct ResolverStatePane: View {
         max(0, total - active - pending)
     }
 
-    private var inactiveLabel: String {
-        inactive == 1 ? "inactive" : "inactive"
-    }
-
-    private func stat(color: Color, symbol: String, label: String, value: Int) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol)
-                .font(.caption)
-                .foregroundStyle(color)
-            Text("\(value)").font(.body).monospacedDigit()
-            Text(label).font(.caption).foregroundStyle(.secondary)
+    private func chip(color: Color, label: String, value: Int) -> some View {
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text("\(value)").font(.subheadline.monospacedDigit().weight(.semibold))
+            Text(label).font(.caption2).foregroundStyle(.secondary)
         }
     }
 }
@@ -508,43 +500,35 @@ private struct ProxyCard: View {
     let address: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                Image(systemName: "network").font(.title2)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Local SOCKS5").font(.caption).foregroundStyle(.secondary)
-                    Text(address).font(.body).monospaced()
-                }
-                Spacer()
+        HStack(spacing: 12) {
+            Image(systemName: "network")
+                .font(.title3)
+                .foregroundStyle(.tint)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Local SOCKS5")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(address)
+                    .font(.body.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            Divider()
-            row("Host", host)
-            row("Port", port)
+            Spacer(minLength: 8)
+            Button {
+                UIPasteboard.general.string = address
+                let gen = UINotificationFeedbackGenerator()
+                gen.notificationOccurred(.success)
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
         }
-        .padding()
+        .padding(14)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-
-    private var parts: [Substring] {
-        address.split(separator: ":", maxSplits: 1)
-    }
-
-    private var host: String {
-        String(parts.first ?? "127.0.0.1")
-    }
-
-    private var port: String {
-        parts.count > 1 ? String(parts[1]) : "18000"
-    }
-
-    private func row(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).monospaced()
-        }
-        .font(.subheadline)
     }
 }
 
@@ -562,12 +546,9 @@ private struct ErrorCard: View {
     }
 }
 
-private struct TrafficCard: View {
+private struct LiveTunnelCard: View {
     let stats: VPNStats
-    /// Wall-clock time of the most recent successful IPC snapshot from the
-    /// packet-tunnel extension. Nil between connects. Surfaced in the footer
-    /// so a frozen card immediately distinguishes "IPC dead" from "tunnel up
-    /// but really idle".
+    let goStatus: String
     let lastSnapshotAt: Date?
 
     @State private var prevSample: (stats: VPNStats, at: Date)?
@@ -594,46 +575,49 @@ private struct TrafficCard: View {
     }()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                Image(systemName: "chart.bar.xaxis").font(.title2)
-                Text("Traffic").font(.headline)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "dot.radiowaves.up.forward")
+                    .foregroundStyle(.tint)
+                Text("Live tunnel").font(.headline)
                 Spacer()
+                liveness
             }
-            Divider()
-            HStack(alignment: .top) {
-                metric(
-                    systemImage: "arrow.up",
-                    label: "Up",
-                    value: Self.totalFormatter.string(fromByteCount: stats.bytesUp),
+
+            HStack(spacing: 12) {
+                throughput(
+                    symbol: "arrow.up",
+                    tint: .accentColor,
+                    total: Self.totalFormatter.string(fromByteCount: stats.bytesUp),
                     rate: upRate
                 )
-                Spacer()
-                metric(
-                    systemImage: "arrow.down",
-                    label: "Down",
-                    value: Self.totalFormatter.string(fromByteCount: stats.bytesDown),
+                throughput(
+                    symbol: "arrow.down",
+                    tint: .green,
+                    total: Self.totalFormatter.string(fromByteCount: stats.bytesDown),
                     rate: downRate
                 )
             }
+
             Divider()
-            row("Active TCP", "\(stats.tcpFlowsActive)")
-            row("Total TCP", "\(stats.tcpFlowsAccepted)")
-            row("DNS queries", "\(stats.dnsQueriesHandled)")
-            Divider()
-            HStack(spacing: 6) {
-                Image(systemName: livenessIcon)
-                    .font(.caption2)
-                    .foregroundStyle(livenessColor)
-                Text(livenessText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer()
+
+            HStack(spacing: 0) {
+                miniStat(label: "TCP", value: "\(stats.tcpFlowsActive)", sub: "of \(stats.tcpFlowsAccepted)")
+                miniStat(label: "DNS", value: "\(stats.dnsQueriesHandled)", sub: "queries")
+                miniStat(label: "Resolvers", value: "\(stats.resolversActive)", sub: "of \(stats.resolversTotal)")
             }
+
+            Divider()
+
+            ResolverStatePane(
+                total: stats.resolversTotal,
+                active: stats.resolversActive,
+                goStatus: goStatus
+            )
         }
-        .padding()
+        .padding(16)
         .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
         .onChange(of: stats) { _, new in
             recomputeRate(with: new)
         }
@@ -642,8 +626,6 @@ private struct TrafficCard: View {
             now = Date()
         }
         .task {
-            // Tick once per second so the "Xs ago" footer keeps updating even
-            // when stats are frozen (which is exactly when the user cares most).
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 now = Date()
@@ -656,20 +638,66 @@ private struct TrafficCard: View {
         return max(0, Int(now.timeIntervalSince(last).rounded()))
     }
 
-    private var livenessText: String {
-        guard let age = ageSeconds else { return "Waiting for stats…" }
-        if age <= 1 { return "Updated just now" }
-        return "Updated \(age)s ago"
+    @ViewBuilder
+    private var liveness: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(livenessColor)
+                .frame(width: 6, height: 6)
+            Text(livenessText)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
     }
 
-    private var livenessIcon: String {
-        guard let age = ageSeconds else { return "hourglass" }
-        return age <= 3 ? "dot.radiowaves.left.and.right" : "exclamationmark.triangle"
+    private var livenessText: String {
+        guard let age = ageSeconds else { return "waiting" }
+        if age <= 1 { return "live" }
+        return "\(age)s ago"
     }
 
     private var livenessColor: Color {
         guard let age = ageSeconds else { return .secondary }
         return age <= 3 ? .green : .orange
+    }
+
+    private func throughput(symbol: String, tint: Color, total: String, rate: Double) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(tint)
+                Text(total)
+                    .font(.title3.monospacedDigit().weight(.semibold))
+            }
+            Text(rateText(rate))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(tint.opacity(0.08))
+        )
+    }
+
+    private func miniStat(label: String, value: String, sub: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            Text(value)
+                .font(.body.monospacedDigit().weight(.semibold))
+            Text(sub)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func recomputeRate(with new: VPNStats) {
@@ -684,83 +712,50 @@ private struct TrafficCard: View {
         downRate = Double(dDown) / dt
     }
 
-    private func metric(systemImage: String, label: String, value: String, rate: Double) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: systemImage).foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(.caption).foregroundStyle(.secondary)
-                Text(value).font(.body).monospacedDigit()
-                Text(rateText(rate))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .monospacedDigit()
-            }
-        }
-    }
-
     private func rateText(_ rate: Double) -> String {
         let bytes = Int64(rate.rounded())
         if bytes <= 0 { return "idle" }
         return "\(Self.rateFormatter.string(fromByteCount: bytes))/s"
     }
-
-    private func row(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).monospacedDigit()
-        }
-        .font(.subheadline)
-    }
 }
 
-private struct ModeCard: View {
+private struct ModeSegment: View {
     let mode: TunnelMode
     let selected: Bool
-    /// True when the other mode is currently active — this card must not be
-    /// tappable, and renders dimmed so the user understands why.
+    /// True when the other mode is currently active — tapping does nothing and
+    /// the segment renders dimmed with a lock glyph so the user understands why.
     var locked: Bool = false
     let onTap: () -> Void
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 14) {
-                ZStack {
-                    Circle()
-                        .fill(selected ? Color.accentColor : Color(.tertiarySystemFill))
-                        .frame(width: 40, height: 40)
-                    Image(systemName: locked ? "lock.fill" : mode.icon)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(selected ? Color.white : Color.secondary)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(mode.label)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text(mode.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                }
-                Spacer(minLength: 4)
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                    .font(.title3)
+            HStack(spacing: 6) {
+                Image(systemName: locked ? "lock.fill" : mode.icon)
+                    .font(.caption.weight(.semibold))
+                Text(shortLabel)
+                    .font(.subheadline.weight(.semibold))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .foregroundStyle(selected ? Color.white : (locked ? Color.secondary : Color.primary))
             .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(Color(.secondarySystemBackground))
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(selected ? Color.accentColor : Color.clear)
+                    .shadow(color: selected ? Color.accentColor.opacity(0.25) : .clear,
+                            radius: 4, y: 1)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(selected ? Color.accentColor : Color.clear, lineWidth: 2)
-            )
-            .opacity(locked ? 0.45 : 1.0)
+            .opacity(locked ? 0.55 : 1.0)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(locked)
+    }
+
+    private var shortLabel: String {
+        switch mode {
+        case .proxy:     return "Proxy"
+        case .systemVPN: return "VPN"
+        }
     }
 }
 
