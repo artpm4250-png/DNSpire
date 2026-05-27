@@ -309,7 +309,7 @@ private struct ResolverRow: View {
                 resolver.enabled.toggle()
             } label: {
                 Image(systemName: resolver.enabled ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(resolver.enabled ? .accentColor : .secondary)
+                    .foregroundStyle(resolver.enabled ? Color.accentColor : Color.secondary)
                     .font(.body)
             }
             .buttonStyle(.borderless)
