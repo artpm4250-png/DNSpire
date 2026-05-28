@@ -169,7 +169,19 @@ final class ProfileStore: ObservableObject {
     // MARK: - Overwrite active (draft → active profile, preserving id + name)
 
     func overwriteActiveServer(from draft: ClientConfigDraft) {
-        guard let idx = servers.firstIndex(where: { $0.id == activeServerID }) else { return }
+        replaceServer(id: activeServerID, fromDraft: draft)
+    }
+
+    func overwriteActiveResolver(from draft: ClientConfigDraft) {
+        replaceResolver(id: activeResolverID, fromDraft: draft)
+    }
+
+    func overwriteActiveTuning(from draft: ClientConfigDraft) {
+        replaceTuning(id: activeTuningID, fromDraft: draft)
+    }
+
+    private func replaceServer(id: UUID, fromDraft draft: ClientConfigDraft) {
+        guard let idx = servers.firstIndex(where: { $0.id == id }) else { return }
         let existing = servers[idx]
         servers[idx] = ServerProfile(
             id: existing.id,
@@ -181,8 +193,8 @@ final class ProfileStore: ObservableObject {
         persistServers()
     }
 
-    func overwriteActiveResolver(from draft: ClientConfigDraft) {
-        guard let idx = resolverProfiles.firstIndex(where: { $0.id == activeResolverID }) else { return }
+    private func replaceResolver(id: UUID, fromDraft draft: ClientConfigDraft) {
+        guard let idx = resolverProfiles.firstIndex(where: { $0.id == id }) else { return }
         let existing = resolverProfiles[idx]
         resolverProfiles[idx] = ResolverProfile(
             id: existing.id,
@@ -192,8 +204,8 @@ final class ProfileStore: ObservableObject {
         persistResolvers()
     }
 
-    func overwriteActiveTuning(from draft: ClientConfigDraft) {
-        guard let idx = tuningPresets.firstIndex(where: { $0.id == activeTuningID }) else { return }
+    private func replaceTuning(id: UUID, fromDraft draft: ClientConfigDraft) {
+        guard let idx = tuningPresets.firstIndex(where: { $0.id == id }) else { return }
         let existing = tuningPresets[idx]
         tuningPresets[idx] = TuningPreset(
             id: existing.id,
@@ -220,6 +232,173 @@ final class ProfileStore: ObservableObject {
             systemVPNDNSResolver: draft.systemVPNDNSResolver
         )
         persistTunings()
+    }
+
+    // MARK: - Update by id (non-active edit)
+
+    /// Replace a server profile's content while preserving its UUID. Used by
+    /// the per-profile editor sheet so non-active profiles can be edited
+    /// without first switching to them (which would replace the live draft).
+    /// Caller is responsible for re-syncing the draft via `applyServer` when
+    /// `id == activeServerID`.
+    func updateServer(id: UUID, name: String, domains: [String], encryptionKey: String, dataEncryptionMethod: Int) {
+        guard let idx = servers.firstIndex(where: { $0.id == id }) else { return }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = trimmedName.isEmpty ? servers[idx].name : trimmedName
+        servers[idx] = ServerProfile(
+            id: id,
+            name: finalName,
+            domains: domains,
+            encryptionKey: encryptionKey,
+            dataEncryptionMethod: dataEncryptionMethod
+        )
+        persistServers()
+    }
+
+    func updateResolver(id: UUID, name: String, resolvers: [ResolverEntry]) {
+        guard let idx = resolverProfiles.firstIndex(where: { $0.id == id }) else { return }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = trimmedName.isEmpty ? resolverProfiles[idx].name : trimmedName
+        resolverProfiles[idx] = ResolverProfile(
+            id: id,
+            name: finalName,
+            resolvers: resolvers
+        )
+        persistResolvers()
+    }
+
+    func updateTuning(id: UUID, with patch: TuningPreset) {
+        guard let idx = tuningPresets.firstIndex(where: { $0.id == id }) else { return }
+        let trimmedName = patch.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = trimmedName.isEmpty ? tuningPresets[idx].name : trimmedName
+        tuningPresets[idx] = TuningPreset(
+            id: id,
+            name: finalName,
+            protocolType: patch.protocolType,
+            listenIP: patch.listenIP,
+            listenPort: patch.listenPort,
+            socks5AuthEnabled: patch.socks5AuthEnabled,
+            socks5User: patch.socks5User,
+            socks5Pass: patch.socks5Pass,
+            resolverBalancingStrategy: patch.resolverBalancingStrategy,
+            logLevel: patch.logLevel,
+            uploadCompressionType: patch.uploadCompressionType,
+            downloadCompressionType: patch.downloadCompressionType,
+            compressionMinSize: patch.compressionMinSize,
+            mtuTestRetries: patch.mtuTestRetries,
+            mtuTestTimeout: patch.mtuTestTimeout,
+            mtuTestParallelism: patch.mtuTestParallelism,
+            packetDuplicationCount: patch.packetDuplicationCount,
+            setupPacketDuplicationCount: patch.setupPacketDuplicationCount,
+            rxTxWorkers: patch.rxTxWorkers,
+            maxPacketsPerBatch: patch.maxPacketsPerBatch,
+            arqWindowSize: patch.arqWindowSize,
+            systemVPNDNSResolver: patch.systemVPNDNSResolver
+        )
+        persistTunings()
+    }
+
+    // MARK: - Add blank
+
+    /// Insert a fresh server profile with empty domain/key. The Stage 0 ≥1
+    /// invariant is satisfied by construction. Caller typically opens the
+    /// editor sheet on the returned id so the user can fill required fields
+    /// before saving — though the profile is already persisted so dismissing
+    /// the editor without changes leaves the new (empty) row in the list.
+    @discardableResult
+    func addBlankServer() -> UUID {
+        let p = ServerProfile(
+            name: Self.uniqueName("New server", existing: servers.map(\.name)),
+            domains: [""],
+            encryptionKey: "",
+            dataEncryptionMethod: ClientConfigDraft.default.dataEncryptionMethod
+        )
+        servers.append(p)
+        persistServers()
+        return p.id
+    }
+
+    @discardableResult
+    func addBlankResolver() -> UUID {
+        let p = ResolverProfile(
+            name: Self.uniqueName("New resolvers", existing: resolverProfiles.map(\.name)),
+            resolvers: []
+        )
+        resolverProfiles.append(p)
+        persistResolvers()
+        return p.id
+    }
+
+    /// Tuning blanks copy ClientConfigDraft.default field-for-field — there's
+    /// no useful empty state (a 0 worker count or 0 MTU window breaks
+    /// upstream validation). The user can then tweak from a known-good base.
+    @discardableResult
+    func addBlankTuning() -> UUID {
+        let d = ClientConfigDraft.default
+        let p = TuningPreset(
+            name: Self.uniqueName("New tuning", existing: tuningPresets.map(\.name)),
+            protocolType: d.protocolType,
+            listenIP: d.listenIP,
+            listenPort: d.listenPort,
+            socks5AuthEnabled: d.socks5AuthEnabled,
+            socks5User: d.socks5User,
+            socks5Pass: d.socks5Pass,
+            resolverBalancingStrategy: d.resolverBalancingStrategy,
+            logLevel: d.logLevel,
+            uploadCompressionType: d.uploadCompressionType,
+            downloadCompressionType: d.downloadCompressionType,
+            compressionMinSize: d.compressionMinSize,
+            mtuTestRetries: d.mtuTestRetries,
+            mtuTestTimeout: d.mtuTestTimeout,
+            mtuTestParallelism: d.mtuTestParallelism,
+            packetDuplicationCount: d.packetDuplicationCount,
+            setupPacketDuplicationCount: d.setupPacketDuplicationCount,
+            rxTxWorkers: d.rxTxWorkers,
+            maxPacketsPerBatch: d.maxPacketsPerBatch,
+            arqWindowSize: d.arqWindowSize,
+            systemVPNDNSResolver: d.systemVPNDNSResolver
+        )
+        tuningPresets.append(p)
+        persistTunings()
+        return p.id
+    }
+
+    // MARK: - Delete (refuses to violate Stage 0 ≥1 or remove active)
+
+    /// Delete a server profile. Returns false (no-op) if:
+    ///   - the slice has only one entry (≥1 invariant), or
+    ///   - the id is the currently active server (UI should block this case
+    ///     up front with "Switch away to delete this profile.").
+    /// On success, caller should also prune ServerTestRunner outcomes via
+    /// `prune(to:)` so persisted probe results for the gone id don't linger.
+    @discardableResult
+    func deleteServer(_ id: UUID) -> Bool {
+        guard servers.count > 1 else { return false }
+        guard id != activeServerID else { return false }
+        guard let idx = servers.firstIndex(where: { $0.id == id }) else { return false }
+        servers.remove(at: idx)
+        persistServers()
+        return true
+    }
+
+    @discardableResult
+    func deleteResolver(_ id: UUID) -> Bool {
+        guard resolverProfiles.count > 1 else { return false }
+        guard id != activeResolverID else { return false }
+        guard let idx = resolverProfiles.firstIndex(where: { $0.id == id }) else { return false }
+        resolverProfiles.remove(at: idx)
+        persistResolvers()
+        return true
+    }
+
+    @discardableResult
+    func deleteTuning(_ id: UUID) -> Bool {
+        guard tuningPresets.count > 1 else { return false }
+        guard id != activeTuningID else { return false }
+        guard let idx = tuningPresets.firstIndex(where: { $0.id == id }) else { return false }
+        tuningPresets.remove(at: idx)
+        persistTunings()
+        return true
     }
 
     // MARK: - Rename

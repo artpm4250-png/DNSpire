@@ -273,7 +273,7 @@ struct AdvancedTuningView: View {
     }
 }
 
-private enum ResolverBalancingOption: Int, CaseIterable, Identifiable {
+enum ResolverBalancingOption: Int, CaseIterable, Identifiable {
     case roundRobinDefault = 0
     case random = 1
     case roundRobin = 2
@@ -301,7 +301,7 @@ private enum ResolverBalancingOption: Int, CaseIterable, Identifiable {
     }
 }
 
-private enum CompressionOption: Int, CaseIterable, Identifiable {
+enum CompressionOption: Int, CaseIterable, Identifiable {
     case off = 0
     case zstd = 1
     case lz4 = 2
@@ -321,7 +321,7 @@ private enum CompressionOption: Int, CaseIterable, Identifiable {
 
 /// Form row with a trailing TextField that surfaces an inline validation error
 /// below when `error` is non-nil. Used by Local Proxy / System VPN sections.
-private struct ValidatedTextRow: View {
+struct ValidatedTextRow: View {
     let label: String
     let placeholder: String
     @Binding var text: String
@@ -348,7 +348,7 @@ private struct ValidatedTextRow: View {
     }
 }
 
-private struct ValidatedPortRow: View {
+struct ValidatedPortRow: View {
     let label: String
     let placeholder: String
     @Binding var value: Int
@@ -373,7 +373,7 @@ private struct ValidatedPortRow: View {
     }
 }
 
-private struct DomainsEditor: View {
+struct DomainsEditor: View {
     @Binding var domains: [String]
 
     var body: some View {
@@ -399,7 +399,7 @@ private struct DomainsEditor: View {
     }
 }
 
-private struct ResolverEditor: View {
+struct ResolverEditor: View {
     @Binding var resolvers: [ResolverEntry]
     @State private var showingEditor = false
     @State private var editorText = ""
@@ -483,7 +483,7 @@ private struct ResolverEditor: View {
 
 }
 
-private struct ResolverRow: View {
+struct ResolverRow: View {
     @Binding var resolver: ResolverEntry
     let onDelete: () -> Void
 

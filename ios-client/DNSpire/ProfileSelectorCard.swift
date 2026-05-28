@@ -233,10 +233,17 @@ struct ProfileSliceSheet: View {
     }
 
     @State private var pendingSwitch: PendingSwitch?
-    @State private var renamingID: UUID?
-    @State private var renameText: String = ""
     @State private var shareLink: ShareLinkItem?
     @State private var importing = false
+    /// Sheet for the per-profile editor (Add / Edit). `EditTarget.isNew`
+    /// distinguishes a freshly-created blank profile from one the user
+    /// chose to edit — both flow through the same editor views.
+    @State private var editing: EditTarget?
+    /// Confirmation dialog for delete. Stored as Identifiable so the dialog
+    /// can render the row name in its title.
+    @State private var pendingDelete: PendingDelete?
+    /// Action sheet anchor for the toolbar `+` (Add new profile…).
+    @State private var addPresented = false
     /// Server-row IDs whose per-resolver drill-down is currently expanded.
     /// Lives in the sheet (not in `ServerTestRunner`) because expansion is a
     /// UI concern that shouldn't survive a sheet dismissal.
@@ -247,34 +254,38 @@ struct ProfileSliceSheet: View {
         let url: String
     }
 
+    struct EditTarget: Identifiable {
+        let id: UUID
+        let isNew: Bool
+    }
+
+    private struct PendingDelete: Identifiable {
+        let id: UUID
+        let name: String
+    }
+
     var body: some View {
         NavigationStack {
             List {
                 Section {
                     ForEach(items, id: \.id) { item in
                         row(id: item.id, name: item.name)
-                            .modifier(ServerRowProbeActions(
+                            .modifier(RowActions(
                                 slice: slice,
-                                onProbe: { probeOne(id: item.id) }
+                                isActive: item.id == activeID,
+                                canDelete: items.count > 1 && item.id != activeID,
+                                onProbe: { probeOne(id: item.id) },
+                                onEdit: { editing = EditTarget(id: item.id, isNew: false) },
+                                onDuplicate: { duplicateAndEdit(of: item.id) },
+                                onDelete: { pendingDelete = PendingDelete(id: item.id, name: item.name) }
                             ))
                         if slice == .server, expandedDrillDown.contains(item.id) {
                             drillDownRows(for: item.id)
                         }
                     }
                 }
-                Section {
-                    Button {
-                        duplicateActive()
-                    } label: {
-                        Label("Duplicate active", systemImage: "doc.on.doc")
-                    }
-                    Button {
-                        renamingID = activeID
-                        renameText = activeName
-                    } label: {
-                        Label("Rename active", systemImage: "pencil")
-                    }
-                    if slice == .server {
+                if slice == .server {
+                    Section {
                         Button {
                             Task {
                                 await testRunner.testAll(
@@ -290,23 +301,36 @@ struct ProfileSliceSheet: View {
                         Button {
                             exportActiveServer()
                         } label: {
-                            Label("Share as link", systemImage: "square.and.arrow.up")
+                            Label("Share active as link", systemImage: "square.and.arrow.up")
                         }
                         .disabled(!canExportActiveServer)
-                        Button {
-                            importing = true
-                        } label: {
-                            Label("Import from link…", systemImage: "square.and.arrow.down")
-                        }
                     }
                 }
             }
             .navigationTitle(slice.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button { addPresented = true } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("Add profile")
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .confirmationDialog(
+                "New \(slice.label.lowercased()) profile",
+                isPresented: $addPresented,
+                titleVisibility: .visible
+            ) {
+                Button("From blank") { addBlankAndEdit() }
+                Button("Duplicate active") { duplicateAndEdit(of: activeID) }
+                if slice == .server {
+                    Button("Import from link…") { importing = true }
+                }
+                Button("Cancel", role: .cancel) {}
             }
             .confirmationDialog(
                 "Switch to “\(pendingSwitch?.name ?? "")”?",
@@ -326,16 +350,28 @@ struct ProfileSliceSheet: View {
             } message: {
                 Text("Your current working values will be replaced with the ones saved in this profile.")
             }
-            .alert(
-                "Rename",
+            .confirmationDialog(
+                "Delete “\(pendingDelete?.name ?? "")”?",
                 isPresented: Binding(
-                    get: { renamingID != nil },
-                    set: { if !$0 { renamingID = nil } }
-                )
+                    get: { pendingDelete != nil },
+                    set: { if !$0 { pendingDelete = nil } }
+                ),
+                titleVisibility: .visible
             ) {
-                TextField("Name", text: $renameText)
-                Button("Save") { performRename() }
-                Button("Cancel", role: .cancel) { renamingID = nil }
+                Button("Delete", role: .destructive) {
+                    if let p = pendingDelete {
+                        performDelete(id: p.id)
+                    }
+                    pendingDelete = nil
+                }
+                Button("Cancel", role: .cancel) { pendingDelete = nil }
+            } message: {
+                Text("This profile will be removed. The action cannot be undone.")
+            }
+            .sheet(item: $editing) { target in
+                editorSheet(for: target)
+                    .environmentObject(configStore)
+                    .environmentObject(profileStore)
             }
             .sheet(isPresented: $importing) {
                 StormDNSImportSheet()
@@ -344,6 +380,15 @@ struct ProfileSliceSheet: View {
             .sheet(item: $shareLink) { item in
                 ShareSheet(items: [item.url])
             }
+        }
+    }
+
+    @ViewBuilder
+    private func editorSheet(for target: EditTarget) -> some View {
+        switch slice {
+        case .server:   ServerProfileEditSheet(id: target.id)
+        case .resolver: ResolverProfileEditSheet(id: target.id)
+        case .tuning:   TuningPresetEditSheet(id: target.id)
         }
     }
 
@@ -606,32 +651,50 @@ struct ProfileSliceSheet: View {
         shareLink = ShareLinkItem(url: link)
     }
 
-    private func duplicateActive() {
+    /// Duplicate a profile by id (active or otherwise) and immediately open
+    /// the editor on the new sibling. Replaces the old "Duplicate active"
+    /// bottom-section button — duplication now lives per-row in the swipe /
+    /// context menu, and chaining straight into an editor matches what the
+    /// user almost always wanted to do next anyway (rename + tweak).
+    private func duplicateAndEdit(of sourceID: UUID) {
         let newID: UUID
         switch slice {
-        case .server:   newID = profileStore.duplicateServer(activeID)
-        case .resolver: newID = profileStore.duplicateResolver(activeID)
-        case .tuning:   newID = profileStore.duplicateTuning(activeID)
+        case .server:   newID = profileStore.duplicateServer(sourceID)
+        case .resolver: newID = profileStore.duplicateResolver(sourceID)
+        case .tuning:   newID = profileStore.duplicateTuning(sourceID)
         }
-        // Stay on the same active profile — Duplicate produces a sibling
-        // copy, it doesn't switch into it. The user can tap the new row to
-        // switch explicitly. (`newID` returned for callers that want to
-        // chain a switch, e.g. import flows in Stage 1.)
-        _ = newID
+        editing = EditTarget(id: newID, isNew: true)
     }
 
-    private func performRename() {
-        let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let id = renamingID else {
-            renamingID = nil
-            return
-        }
+    /// Create a blank profile and open the editor on it. The row appears in
+    /// the list as soon as the ProfileStore mutator returns — the editor
+    /// then lets the user fill it in. Dismissing the editor without changes
+    /// leaves the new (mostly empty) row in the list; the user can delete
+    /// it via swipe if they didn't mean to add one.
+    private func addBlankAndEdit() {
+        let newID: UUID
         switch slice {
-        case .server:   profileStore.renameServer(id: id, to: trimmed)
-        case .resolver: profileStore.renameResolver(id: id, to: trimmed)
-        case .tuning:   profileStore.renameTuning(id: id, to: trimmed)
+        case .server:   newID = profileStore.addBlankServer()
+        case .resolver: newID = profileStore.addBlankResolver()
+        case .tuning:   newID = profileStore.addBlankTuning()
         }
-        renamingID = nil
+        editing = EditTarget(id: newID, isNew: true)
+    }
+
+    private func performDelete(id: UUID) {
+        let ok: Bool
+        switch slice {
+        case .server:
+            ok = profileStore.deleteServer(id)
+            if ok {
+                // Drop stale ServerTestRunner outcomes for the gone server
+                // so the next "Test all" pass starts clean.
+                testRunner.prune(to: Set(profileStore.servers.map(\.id)))
+            }
+        case .resolver: ok = profileStore.deleteResolver(id)
+        case .tuning:   ok = profileStore.deleteTuning(id)
+        }
+        _ = ok
     }
 }
 
@@ -834,23 +897,46 @@ struct StormDNSImportSheet: View {
     }
 }
 
-// MARK: - Per-row probe affordances
+// MARK: - Per-row actions
 
-/// Attaches a trailing swipe action and a long-press context menu to a
-/// server-slice row. Renders nothing for resolver/tuning slices — those
-/// don't have a meaningful per-row probe yet.
-///
-/// Lives as a `ViewModifier` rather than chained `.swipeActions` directly on
-/// the row so the slice-kind gate is in one place and the row helper stays
-/// agnostic to which slice it's drawing.
-private struct ServerRowProbeActions: ViewModifier {
+/// Attaches trailing swipe actions and a long-press context menu to a
+/// profile-slice row. Surfaces Edit / Duplicate / Delete on every slice plus
+/// Test (server-only). `canDelete` is the combined "active row + ≥1
+/// invariant" gate — when false, Delete is omitted from both affordances so
+/// the user can't reach a forbidden state from the UI. ProfileStore still
+/// double-guards for safety.
+struct RowActions: ViewModifier {
     let slice: ProfileSliceKind
+    let isActive: Bool
+    let canDelete: Bool
     let onProbe: () -> Void
+    let onEdit: () -> Void
+    let onDuplicate: () -> Void
+    let onDelete: () -> Void
 
     func body(content: Content) -> some View {
-        if slice == .server {
-            content
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+        content
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                if canDelete {
+                    Button(role: .destructive) {
+                        onDelete()
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+                Button {
+                    onDuplicate()
+                } label: {
+                    Label("Duplicate", systemImage: "plus.square.on.square")
+                }
+                .tint(.indigo)
+                Button {
+                    onEdit()
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .tint(.gray)
+                if slice == .server {
                     Button {
                         onProbe()
                     } label: {
@@ -858,15 +944,33 @@ private struct ServerRowProbeActions: ViewModifier {
                     }
                     .tint(.accentColor)
                 }
-                .contextMenu {
+            }
+            .contextMenu {
+                Button {
+                    onEdit()
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                Button {
+                    onDuplicate()
+                } label: {
+                    Label("Duplicate", systemImage: "plus.square.on.square")
+                }
+                if slice == .server {
                     Button {
                         onProbe()
                     } label: {
                         Label("Test this server", systemImage: "speedometer")
                     }
                 }
-        } else {
-            content
-        }
+                if canDelete {
+                    Divider()
+                    Button(role: .destructive) {
+                        onDelete()
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+            }
     }
 }
