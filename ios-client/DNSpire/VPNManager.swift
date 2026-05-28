@@ -232,15 +232,13 @@ final class VPNManager: ObservableObject {
             try await mgr.removeFromPreferences()
             self.manager = nil
             self.profileInstalled = false
-            self.status = .disabled
-            self.goStatus = ""
-            self.stats = .init()
-            self.verification = .idle
-            self.lastSnapshotAt = nil
-            self.firstSnapshotLogged = false
-            self.ipcMissStreak = 0
-            self.activeSessionServerID = nil
-            self.mtuHintApplied = false
+            // Route through updateStatus so managePollLoop cancels pollTask
+            // and zeroes session state. Writing `status = .disabled` directly
+            // (the old code) left the poll loop spinning against a manager
+            // that no longer exists, spamming "[vpn] snapshot unavailable"
+            // every 10 polls forever. .invalid → .disabled mapping handles
+            // both the status assignment and the teardown.
+            updateStatus(from: .invalid)
             self.lastError = nil
         } catch {
             self.lastError = error.localizedDescription

@@ -320,17 +320,23 @@ struct ValidatedPortRow: View {
 
 struct DomainsEditor: View {
     @Binding var domains: [String]
+    /// Parallel stable IDs for ForEach. `id: \.offset` on enumerated() lets
+    /// SwiftUI think "the row at index 1 is still the same row" after the row
+    /// above it is deleted — so focus and any half-typed text stay glued to
+    /// that index and migrate onto the wrong domain. UUID per slot fixes it.
+    @State private var rowIDs: [UUID] = []
 
     var body: some View {
-        ForEach(Array(domains.enumerated()), id: \.offset) { idx, _ in
+        ForEach(Array(rowIDs.enumerated()), id: \.element) { idx, _ in
             HStack {
-                TextField("v.example.com", text: $domains[idx])
+                TextField("v.example.com", text: bindingForRow(at: idx))
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
                 if domains.count > 1 {
                     Button(role: .destructive) {
                         domains.remove(at: idx)
+                        rowIDs.remove(at: idx)
                     } label: { Image(systemName: "minus.circle.fill") }
                     .buttonStyle(.borderless)
                 }
@@ -338,8 +344,29 @@ struct DomainsEditor: View {
         }
         Button {
             domains.append("")
+            rowIDs.append(UUID())
         } label: {
             Label("Add domain", systemImage: "plus.circle")
+        }
+        .onAppear { syncIDs() }
+        .onChange(of: domains.count) { _, _ in syncIDs() }
+    }
+
+    /// Body re-renders between the user tapping delete and our @State catching
+    /// up. Falls back to a no-op binding for the one frame where idx is out
+    /// of range to avoid an index-out-of-bounds crash on `$domains[idx]`.
+    private func bindingForRow(at idx: Int) -> Binding<String> {
+        guard idx < domains.count else { return .constant("") }
+        return $domains[idx]
+    }
+
+    /// Reconcile rowIDs to match domains.count. Pads on growth, trims on
+    /// shrink — covers external mutations (loadFromStore wholesale-assigns
+    /// `domains` on sheet open) that don't go through our buttons.
+    private func syncIDs() {
+        while rowIDs.count < domains.count { rowIDs.append(UUID()) }
+        if rowIDs.count > domains.count {
+            rowIDs.removeLast(rowIDs.count - domains.count)
         }
     }
 }
