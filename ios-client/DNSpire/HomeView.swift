@@ -747,8 +747,14 @@ private struct LiveTunnelCard: View {
         .padding(16)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 14))
-        .onChange(of: stats) { _, new in
-            recomputeRate(with: new)
+        .onChange(of: now) { _, _ in
+            // Drive rate recomputation off the 1Hz heartbeat, not stats
+            // changes: when traffic stops, identical stats don't fire
+            // .onChange so the displayed rate would freeze at whatever the
+            // last burst computed. VPNManager polls at 1Hz too, so this
+            // ticks at the same frequency new samples arrive — but it also
+            // ticks during idle periods and lets rate decay to 0.
+            recomputeRate(with: stats)
         }
         .onAppear {
             prevSample = (stats, Date())

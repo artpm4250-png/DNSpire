@@ -102,6 +102,12 @@ final class ResolverScanner: ObservableObject {
         defer { isRunning = false }
 
         for i in rows.indices { rows[i].outcome = .running }
+        // Snapshot the row identity that goes to the Go side. If the user
+        // edits the input field mid-scan, ingest() rebuilds `rows` with
+        // fresh UUIDs — applying positional results to that new list would
+        // splatter outcomes onto unrelated hosts. Compare IDs after the
+        // detached call returns and drop results if the list has changed.
+        let snapshotIDs = rows.map(\.id)
         let payload = rows.map(\.display).joined(separator: ";")
         let probeControl = controlName
         let result = await Task.detached(priority: .userInitiated) { () -> String in
@@ -119,6 +125,7 @@ final class ResolverScanner: ObservableObject {
             return csv ?? ""
         }.value
 
+        guard rows.map(\.id) == snapshotIDs else { return }
         applyScanResult(csv: result)
     }
 

@@ -101,11 +101,26 @@ final class TunnelController: ObservableObject {
 
     private func applyStatusString(_ state: String) {
         if state.hasPrefix("error:") {
+            // Runtime reported a terminal error. Tear down our side so the
+            // user can retry from a clean slate — without clearing self.tunnel,
+            // start() guards on `tunnel == nil` and Connect becomes a no-op
+            // until they tap Disconnect first. Stopping the keeper here keeps
+            // the silence-loop from draining battery after the proxy is dead.
             self.status = .error
             self.lastError = String(state.dropFirst("error:".count))
             self.statusDetail = state
+            if let t = tunnel {
+                try? t.stop()
+            }
+            self.tunnel = nil
+            self.socksAddress = ""
+            backgroundKeeper.stop()
             return
         }
+        // After stop()/error the Go runtime can still race a final status
+        // update past us. Without this guard a stale "starting" / "reconnecting"
+        // would flip the badge back out of .stopped/.error.
+        guard tunnel != nil else { return }
         self.statusDetail = state
         self.status = TunnelStatus(rawValue: state) ?? .starting
     }

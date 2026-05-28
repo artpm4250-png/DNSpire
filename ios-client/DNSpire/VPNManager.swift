@@ -195,8 +195,13 @@ final class VPNManager: ObservableObject {
             try mgr.connection.startVPNTunnel()
             self.lastError = nil
         } catch {
+            // Don't mutate `status` here: `.disabled` is reserved for "no VPN
+            // profile installed" (drives the badge's "Profile not installed"
+            // label). A user cancelling the system VPN dialog or a transient
+            // startVPNTunnel throw still leaves the profile in place — the
+            // NEVPNStatusDidChange observer reflects actual system state, and
+            // `lastError` surfaces in the ErrorCard.
             self.lastError = error.localizedDescription
-            self.status = .disabled
         }
     }
 
