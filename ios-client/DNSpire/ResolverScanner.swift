@@ -2,7 +2,7 @@ import Foundation
 import Combine
 import DNSpireCore
 
-/// Bulk DNS-resolver scanner backing the Scan tab. Takes a free-form text
+/// Bulk DNS-resolver scanner backing [[ScanView]]. Takes a free-form text
 /// blob (paste-import, or contents of a `.txt` the user shared in), normalises
 /// it into `host` / `host:port` rows, and races them in parallel through
 /// `DNSpireMobileProbeResolvers` — a single DNS A-query per resolver, with
@@ -182,7 +182,7 @@ final class ResolverScanner: ObservableObject {
 
 extension ResolverScanner.Outcome {
     /// UI helper: 200/600ms thresholds match [[ServerTestRunner]].score —
-    /// users see consistent green/yellow/red bands across both tabs.
+    /// users see consistent green/yellow/red bands across both surfaces.
     enum Score { case good, fair, poor }
 
     var score: Score? {

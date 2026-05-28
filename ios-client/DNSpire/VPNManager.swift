@@ -122,7 +122,7 @@ final class VPNManager: ObservableObject {
     }
 
     /// Wires log sink so extension log lines surface in the main app's Logs
-    /// tab while the tunnel is active. Called once from DNSpireApp.task.
+    /// sheet while the tunnel is active. Called once from DNSpireApp.task.
     func attach(logStore: LogStore) {
         self.logStore = logStore
     }
@@ -344,7 +344,7 @@ final class VPNManager: ObservableObject {
     }
 
     /// Rate-limited diagnostic: emit once on first miss, then every 10s while
-    /// misses continue. Keeps the Logs tab readable when the extension is
+    /// misses continue. Keeps the Logs sheet readable when the extension is
     /// genuinely down (otherwise we'd append one line per poll = 1/sec).
     private func noteIPCMiss(reason: String) {
         ipcMissStreak += 1

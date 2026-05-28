@@ -11,10 +11,10 @@ import Combine
 /// (overwrite → draft into a profile). Connect-flow still reads `draft` —
 /// profiles are invisible to it.
 ///
-/// Stage 0 invariant: every profile list has ≥1 entry. Add/Delete arrive in
-/// Stage 4 (Profiles tab); for now profiles are created only via
-/// `duplicate*` or `capture*AsNew`, and never removed, so the invariant
-/// holds trivially.
+/// Stage 0 invariant: every profile list has ≥1 entry. Add/Delete now live
+/// behind the per-row swipe/context affordances on the profile card; the
+/// invariant is enforced by `deleteServer`/`deleteResolver`/`deleteTuning`
+/// refusing to remove the last entry or the currently active row.
 @MainActor
 final class ProfileStore: ObservableObject {
     @Published private(set) var servers: [ServerProfile]

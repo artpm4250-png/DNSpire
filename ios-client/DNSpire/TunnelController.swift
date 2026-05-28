@@ -38,7 +38,7 @@ final class TunnelController: ObservableObject {
     private let backgroundKeeper = BackgroundAudioKeeper()
 
     /// Hooks the controller up to a LogStore so Go-side log lines surface in
-    /// the UI's Logs tab. Called once from DNSpireApp.task.
+    /// the UI's Logs sheet. Called once from DNSpireApp.task.
     func attach(logStore: LogStore) {
         self.logStore = logStore
     }

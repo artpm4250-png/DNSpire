@@ -178,7 +178,7 @@ struct HomeView: View {
     }
 
     /// True if either backend is doing work. Used to lock the mode picker so
-    /// the user can't switch tabs underneath a live tunnel.
+    /// the user can't switch modes underneath a live tunnel.
     private var isAnyTunnelBusy: Bool {
         let proxyBusy = tunnel.status != .stopped && tunnel.status != .error
         let vpnBusy = vpn.status == .connected ||

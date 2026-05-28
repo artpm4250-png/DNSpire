@@ -26,7 +26,7 @@ final class Verifier {
     }
 
     /// Telemetry sink. The extension wires this to `LogRing.append`
-    /// so verifier lines show up in the Logs tab next to upstream
+    /// so verifier lines show up in the Logs sheet next to upstream
     /// client output.
     typealias LogSink = (String) -> Void
 

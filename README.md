@@ -7,7 +7,8 @@ proxy clients such as Happ or Shadowrocket.
 
 ## Status
 
-Two operating modes, selectable in the **Connect** tab:
+Two operating modes, selectable from the mode picker at the top of the home
+screen:
 
 **1. Local SOCKS5 proxy (works with free Apple ID).** The app spawns the Go
 client in-process, which opens a local SOCKS5 listener on `127.0.0.1:18000`.
@@ -98,7 +99,8 @@ You need:
    record for the VPS IP plus an `NS` record pointing the subdomain at it.
 4. Run `server_linux_install.sh` from the upstream repo on the VPS.
 
-The values you need to copy into the iOS app's **Settings** tab:
+The values you need to enter into the **active Server profile** — tap the
+"Server" row on the home screen's profile card, then Edit:
 
 | Server field           | iOS app field           |
 |------------------------|-------------------------|
@@ -107,8 +109,10 @@ The values you need to copy into the iOS app's **Settings** tab:
 | `DATA_ENCRYPTION_METHOD` | Encryption method     |
 
 The resolvers list is what the client uses to reach the server; it does not
-need to match anything on the server side. In the iOS app, open **Settings →
-Resolvers** and paste one resolver per line or a comma-separated list.
+need to match anything on the server side. In the iOS app, tap the
+"Resolvers" row on the profile card, then Edit, and paste one resolver per
+line or a comma-separated list. Bulk-import a `.txt` of candidates and
+benchmark their latency via **Tools → Scan resolvers** on the home toolbar.
 
 ## How local proxy mode works
 

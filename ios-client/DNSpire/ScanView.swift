@@ -1,7 +1,8 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Bulk DNS-resolver scan tab. Stage 4 of [[whitedns-catchup-roadmap]].
+/// Bulk DNS-resolver scan sheet, opened from [[HomeView]]'s Tools menu.
+/// Stage 4 of [[whitedns-catchup-roadmap]].
 ///
 /// The user pastes (or imports a `.txt` of) IP / IP:PORT lines, taps Scan, and
 /// gets one DNS A-query latency per line. Results are read-only here — copy /
