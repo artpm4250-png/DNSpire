@@ -26,19 +26,20 @@ struct ResolverProfile: Codable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey { case id, name, resolvers }
 }
 
-/// Everything else from [[ClientConfigDraft]] that isn't identity or resolvers:
-/// transport, listener, compression, MTU probing, ARQ, worker counts. Lets the
-/// user keep a "fast LTE" preset and a "stable Wi-Fi" preset against the same
-/// server.
+/// Transport-tuning slice: everything that shapes how the upstream Go client
+/// runs the tunnel, but excludes (a) server identity (lives in [[ServerProfile]]),
+/// (b) resolver list (lives in [[ResolverProfile]]), and (c) **local proxy
+/// settings** (listen address / SOCKS5 auth) — those are app-wide and edited
+/// from [[AppPreferencesSheet]] because they describe where on *this device*
+/// the SOCKS5 listener binds, not anything about a particular server.
+///
+/// Lets the user keep e.g. a "fast LTE" preset (high parallelism, short ARQ
+/// RTO, aggressive duplication) and a "stable Wi-Fi" preset (relaxed) against
+/// the same server. Decoding is lenient: a saved preset from an older build
+/// missing the post-2026-05 fields decodes with their `.default` values.
 struct TuningPreset: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
     var name: String
-    var protocolType: String
-    var listenIP: String
-    var listenPort: Int
-    var socks5AuthEnabled: Bool
-    var socks5User: String
-    var socks5Pass: String
     var resolverBalancingStrategy: Int
     var logLevel: String
     var uploadCompressionType: Int
@@ -54,16 +55,148 @@ struct TuningPreset: Codable, Identifiable, Equatable {
     var arqWindowSize: Int
     var systemVPNDNSResolver: String
 
+    // Added 2026-05: upstream MasterDNSVpn parameters previously hard-coded
+    // to defaults. All ranges and labels mirror upstream `ClientConfig`
+    // (internal/config/client.go).
+    var minUploadMTU: Int
+    var maxUploadMTU: Int
+    var minDownloadMTU: Int
+    var maxDownloadMTU: Int
+    var autoRemoveLowMTUServers: Bool
+    var streamResolverFailoverResendThreshold: Int
+    var streamResolverFailoverCooldownSec: Double
+    var recheckInactiveServersEnabled: Bool
+    var autoDisableTimeoutServers: Bool
+    var autoDisableTimeoutWindowSeconds: Double
+    var baseEncodeData: Bool
+    /// `0` = let upstream auto-derive from `rxTxWorkers`. Anything else is an
+    /// explicit override. Matches the upstream override semantics: only
+    /// non-zero values bypass `deriveRecommendedTunnelProcessWorkers`.
+    var tunnelProcessWorkers: Int
+    var tunnelPacketTimeoutSec: Double
+    var arqInitialRTOSeconds: Double
+    var arqMaxRTOSeconds: Double
+
     enum CodingKeys: String, CodingKey {
         case id, name
-        case protocolType, listenIP, listenPort
-        case socks5AuthEnabled, socks5User, socks5Pass
         case resolverBalancingStrategy, logLevel
         case uploadCompressionType, downloadCompressionType, compressionMinSize
         case mtuTestRetries, mtuTestTimeout, mtuTestParallelism
         case packetDuplicationCount, setupPacketDuplicationCount
         case rxTxWorkers, maxPacketsPerBatch, arqWindowSize
         case systemVPNDNSResolver
+        case minUploadMTU, maxUploadMTU, minDownloadMTU, maxDownloadMTU
+        case autoRemoveLowMTUServers
+        case streamResolverFailoverResendThreshold
+        case streamResolverFailoverCooldownSec
+        case recheckInactiveServersEnabled
+        case autoDisableTimeoutServers, autoDisableTimeoutWindowSeconds
+        case baseEncodeData
+        case tunnelProcessWorkers
+        case tunnelPacketTimeoutSec
+        case arqInitialRTOSeconds, arqMaxRTOSeconds
+    }
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        resolverBalancingStrategy: Int,
+        logLevel: String,
+        uploadCompressionType: Int,
+        downloadCompressionType: Int,
+        compressionMinSize: Int,
+        mtuTestRetries: Int,
+        mtuTestTimeout: Double,
+        mtuTestParallelism: Int,
+        packetDuplicationCount: Int,
+        setupPacketDuplicationCount: Int,
+        rxTxWorkers: Int,
+        maxPacketsPerBatch: Int,
+        arqWindowSize: Int,
+        systemVPNDNSResolver: String,
+        minUploadMTU: Int,
+        maxUploadMTU: Int,
+        minDownloadMTU: Int,
+        maxDownloadMTU: Int,
+        autoRemoveLowMTUServers: Bool,
+        streamResolverFailoverResendThreshold: Int,
+        streamResolverFailoverCooldownSec: Double,
+        recheckInactiveServersEnabled: Bool,
+        autoDisableTimeoutServers: Bool,
+        autoDisableTimeoutWindowSeconds: Double,
+        baseEncodeData: Bool,
+        tunnelProcessWorkers: Int,
+        tunnelPacketTimeoutSec: Double,
+        arqInitialRTOSeconds: Double,
+        arqMaxRTOSeconds: Double
+    ) {
+        self.id = id
+        self.name = name
+        self.resolverBalancingStrategy = resolverBalancingStrategy
+        self.logLevel = logLevel
+        self.uploadCompressionType = uploadCompressionType
+        self.downloadCompressionType = downloadCompressionType
+        self.compressionMinSize = compressionMinSize
+        self.mtuTestRetries = mtuTestRetries
+        self.mtuTestTimeout = mtuTestTimeout
+        self.mtuTestParallelism = mtuTestParallelism
+        self.packetDuplicationCount = packetDuplicationCount
+        self.setupPacketDuplicationCount = setupPacketDuplicationCount
+        self.rxTxWorkers = rxTxWorkers
+        self.maxPacketsPerBatch = maxPacketsPerBatch
+        self.arqWindowSize = arqWindowSize
+        self.systemVPNDNSResolver = systemVPNDNSResolver
+        self.minUploadMTU = minUploadMTU
+        self.maxUploadMTU = maxUploadMTU
+        self.minDownloadMTU = minDownloadMTU
+        self.maxDownloadMTU = maxDownloadMTU
+        self.autoRemoveLowMTUServers = autoRemoveLowMTUServers
+        self.streamResolverFailoverResendThreshold = streamResolverFailoverResendThreshold
+        self.streamResolverFailoverCooldownSec = streamResolverFailoverCooldownSec
+        self.recheckInactiveServersEnabled = recheckInactiveServersEnabled
+        self.autoDisableTimeoutServers = autoDisableTimeoutServers
+        self.autoDisableTimeoutWindowSeconds = autoDisableTimeoutWindowSeconds
+        self.baseEncodeData = baseEncodeData
+        self.tunnelProcessWorkers = tunnelProcessWorkers
+        self.tunnelPacketTimeoutSec = tunnelPacketTimeoutSec
+        self.arqInitialRTOSeconds = arqInitialRTOSeconds
+        self.arqMaxRTOSeconds = arqMaxRTOSeconds
+    }
+
+    init(from decoder: Decoder) throws {
+        let fallback = ClientConfigDraft.default
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        self.name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Untitled"
+        self.resolverBalancingStrategy = try container.decodeIfPresent(Int.self, forKey: .resolverBalancingStrategy) ?? fallback.resolverBalancingStrategy
+        self.logLevel = try container.decodeIfPresent(String.self, forKey: .logLevel) ?? fallback.logLevel
+        self.uploadCompressionType = try container.decodeIfPresent(Int.self, forKey: .uploadCompressionType) ?? fallback.uploadCompressionType
+        self.downloadCompressionType = try container.decodeIfPresent(Int.self, forKey: .downloadCompressionType) ?? fallback.downloadCompressionType
+        self.compressionMinSize = try container.decodeIfPresent(Int.self, forKey: .compressionMinSize) ?? fallback.compressionMinSize
+        self.mtuTestRetries = try container.decodeIfPresent(Int.self, forKey: .mtuTestRetries) ?? fallback.mtuTestRetries
+        self.mtuTestTimeout = try container.decodeIfPresent(Double.self, forKey: .mtuTestTimeout) ?? fallback.mtuTestTimeout
+        self.mtuTestParallelism = try container.decodeIfPresent(Int.self, forKey: .mtuTestParallelism) ?? fallback.mtuTestParallelism
+        self.packetDuplicationCount = try container.decodeIfPresent(Int.self, forKey: .packetDuplicationCount) ?? fallback.packetDuplicationCount
+        self.setupPacketDuplicationCount = try container.decodeIfPresent(Int.self, forKey: .setupPacketDuplicationCount) ?? fallback.setupPacketDuplicationCount
+        self.rxTxWorkers = try container.decodeIfPresent(Int.self, forKey: .rxTxWorkers) ?? fallback.rxTxWorkers
+        self.maxPacketsPerBatch = try container.decodeIfPresent(Int.self, forKey: .maxPacketsPerBatch) ?? fallback.maxPacketsPerBatch
+        self.arqWindowSize = try container.decodeIfPresent(Int.self, forKey: .arqWindowSize) ?? fallback.arqWindowSize
+        self.systemVPNDNSResolver = try container.decodeIfPresent(String.self, forKey: .systemVPNDNSResolver) ?? fallback.systemVPNDNSResolver
+        self.minUploadMTU = try container.decodeIfPresent(Int.self, forKey: .minUploadMTU) ?? fallback.minUploadMTU
+        self.maxUploadMTU = try container.decodeIfPresent(Int.self, forKey: .maxUploadMTU) ?? fallback.maxUploadMTU
+        self.minDownloadMTU = try container.decodeIfPresent(Int.self, forKey: .minDownloadMTU) ?? fallback.minDownloadMTU
+        self.maxDownloadMTU = try container.decodeIfPresent(Int.self, forKey: .maxDownloadMTU) ?? fallback.maxDownloadMTU
+        self.autoRemoveLowMTUServers = try container.decodeIfPresent(Bool.self, forKey: .autoRemoveLowMTUServers) ?? fallback.autoRemoveLowMTUServers
+        self.streamResolverFailoverResendThreshold = try container.decodeIfPresent(Int.self, forKey: .streamResolverFailoverResendThreshold) ?? fallback.streamResolverFailoverResendThreshold
+        self.streamResolverFailoverCooldownSec = try container.decodeIfPresent(Double.self, forKey: .streamResolverFailoverCooldownSec) ?? fallback.streamResolverFailoverCooldownSec
+        self.recheckInactiveServersEnabled = try container.decodeIfPresent(Bool.self, forKey: .recheckInactiveServersEnabled) ?? fallback.recheckInactiveServersEnabled
+        self.autoDisableTimeoutServers = try container.decodeIfPresent(Bool.self, forKey: .autoDisableTimeoutServers) ?? fallback.autoDisableTimeoutServers
+        self.autoDisableTimeoutWindowSeconds = try container.decodeIfPresent(Double.self, forKey: .autoDisableTimeoutWindowSeconds) ?? fallback.autoDisableTimeoutWindowSeconds
+        self.baseEncodeData = try container.decodeIfPresent(Bool.self, forKey: .baseEncodeData) ?? fallback.baseEncodeData
+        self.tunnelProcessWorkers = try container.decodeIfPresent(Int.self, forKey: .tunnelProcessWorkers) ?? fallback.tunnelProcessWorkers
+        self.tunnelPacketTimeoutSec = try container.decodeIfPresent(Double.self, forKey: .tunnelPacketTimeoutSec) ?? fallback.tunnelPacketTimeoutSec
+        self.arqInitialRTOSeconds = try container.decodeIfPresent(Double.self, forKey: .arqInitialRTOSeconds) ?? fallback.arqInitialRTOSeconds
+        self.arqMaxRTOSeconds = try container.decodeIfPresent(Double.self, forKey: .arqMaxRTOSeconds) ?? fallback.arqMaxRTOSeconds
     }
 }
 
@@ -72,8 +205,10 @@ struct ClientConfigDraft: Codable, Equatable {
     var encryptionKey: String
     /// 0=None, 1=XOR, 2=ChaCha20, 3=AES-128-GCM, 4=AES-192-GCM, 5=AES-256-GCM.
     var dataEncryptionMethod: Int
-    /// "SOCKS5" or "TCP". For local proxy mode, must be SOCKS5.
+    /// "SOCKS5" or "TCP". For local proxy mode, must be SOCKS5. App-wide:
+    /// edited from [[AppPreferencesSheet]], not per-tuning preset.
     var protocolType: String
+    /// App-wide local proxy listener — edited from [[AppPreferencesSheet]].
     var listenIP: String
     var listenPort: Int
     var socks5AuthEnabled: Bool
@@ -81,7 +216,8 @@ struct ClientConfigDraft: Codable, Equatable {
     var socks5Pass: String
     var resolvers: [ResolverEntry]
     var resolverBalancingStrategy: Int
-    /// One of "DEBUG", "INFO", "WARN", "ERROR".
+    /// One of "DEBUG", "INFO", "WARN", "ERROR". Single source of truth — edited
+    /// from per-tuning preset only (no longer duplicated in App preferences).
     var logLevel: String
     var uploadCompressionType: Int
     var downloadCompressionType: Int
@@ -102,6 +238,26 @@ struct ClientConfigDraft: Codable, Equatable {
     /// tunnel is actually carrying traffic. Must be `https://`; empty falls back
     /// to the default. See [[whitedns-catchup-roadmap]] Stage 3.
     var verifyURL: String
+
+    // Upstream MasterDNSVpn parameters surfaced in [[TuningPresetEditSheet]]
+    // (added 2026-05). Defaults mirror `defaultClientConfig()` in
+    // upstream/internal/config/client.go which is already mobile-friendly.
+    var minUploadMTU: Int
+    var maxUploadMTU: Int
+    var minDownloadMTU: Int
+    var maxDownloadMTU: Int
+    var autoRemoveLowMTUServers: Bool
+    var streamResolverFailoverResendThreshold: Int
+    var streamResolverFailoverCooldownSec: Double
+    var recheckInactiveServersEnabled: Bool
+    var autoDisableTimeoutServers: Bool
+    var autoDisableTimeoutWindowSeconds: Double
+    var baseEncodeData: Bool
+    /// `0` = upstream auto-derives from `rxTxWorkers`.
+    var tunnelProcessWorkers: Int
+    var tunnelPacketTimeoutSec: Double
+    var arqInitialRTOSeconds: Double
+    var arqMaxRTOSeconds: Double
 
     static let `default` = ClientConfigDraft(
         domains: ["v.example.com"],
@@ -128,7 +284,22 @@ struct ClientConfigDraft: Codable, Equatable {
         maxPacketsPerBatch: 8,
         arqWindowSize: 600,
         systemVPNDNSResolver: "1.1.1.1:53",
-        verifyURL: "https://1.1.1.1/cdn-cgi/trace"
+        verifyURL: "https://1.1.1.1/cdn-cgi/trace",
+        minUploadMTU: 38,
+        maxUploadMTU: 150,
+        minDownloadMTU: 100,
+        maxDownloadMTU: 500,
+        autoRemoveLowMTUServers: true,
+        streamResolverFailoverResendThreshold: 2,
+        streamResolverFailoverCooldownSec: 2.5,
+        recheckInactiveServersEnabled: true,
+        autoDisableTimeoutServers: true,
+        autoDisableTimeoutWindowSeconds: 30.0,
+        baseEncodeData: false,
+        tunnelProcessWorkers: 0,
+        tunnelPacketTimeoutSec: 10.0,
+        arqInitialRTOSeconds: 1.0,
+        arqMaxRTOSeconds: 5.0
     )
 
     enum CodingKeys: String, CodingKey {
@@ -140,6 +311,16 @@ struct ClientConfigDraft: Codable, Equatable {
         case rxTxWorkers, maxPacketsPerBatch, arqWindowSize
         case systemVPNDNSResolver
         case verifyURL
+        case minUploadMTU, maxUploadMTU, minDownloadMTU, maxDownloadMTU
+        case autoRemoveLowMTUServers
+        case streamResolverFailoverResendThreshold
+        case streamResolverFailoverCooldownSec
+        case recheckInactiveServersEnabled
+        case autoDisableTimeoutServers, autoDisableTimeoutWindowSeconds
+        case baseEncodeData
+        case tunnelProcessWorkers
+        case tunnelPacketTimeoutSec
+        case arqInitialRTOSeconds, arqMaxRTOSeconds
     }
 
     init(domains: [String],
@@ -166,7 +347,22 @@ struct ClientConfigDraft: Codable, Equatable {
          maxPacketsPerBatch: Int,
          arqWindowSize: Int,
          systemVPNDNSResolver: String,
-         verifyURL: String) {
+         verifyURL: String,
+         minUploadMTU: Int,
+         maxUploadMTU: Int,
+         minDownloadMTU: Int,
+         maxDownloadMTU: Int,
+         autoRemoveLowMTUServers: Bool,
+         streamResolverFailoverResendThreshold: Int,
+         streamResolverFailoverCooldownSec: Double,
+         recheckInactiveServersEnabled: Bool,
+         autoDisableTimeoutServers: Bool,
+         autoDisableTimeoutWindowSeconds: Double,
+         baseEncodeData: Bool,
+         tunnelProcessWorkers: Int,
+         tunnelPacketTimeoutSec: Double,
+         arqInitialRTOSeconds: Double,
+         arqMaxRTOSeconds: Double) {
         self.domains = domains
         self.encryptionKey = encryptionKey
         self.dataEncryptionMethod = dataEncryptionMethod
@@ -192,6 +388,21 @@ struct ClientConfigDraft: Codable, Equatable {
         self.arqWindowSize = arqWindowSize
         self.systemVPNDNSResolver = systemVPNDNSResolver
         self.verifyURL = verifyURL
+        self.minUploadMTU = minUploadMTU
+        self.maxUploadMTU = maxUploadMTU
+        self.minDownloadMTU = minDownloadMTU
+        self.maxDownloadMTU = maxDownloadMTU
+        self.autoRemoveLowMTUServers = autoRemoveLowMTUServers
+        self.streamResolverFailoverResendThreshold = streamResolverFailoverResendThreshold
+        self.streamResolverFailoverCooldownSec = streamResolverFailoverCooldownSec
+        self.recheckInactiveServersEnabled = recheckInactiveServersEnabled
+        self.autoDisableTimeoutServers = autoDisableTimeoutServers
+        self.autoDisableTimeoutWindowSeconds = autoDisableTimeoutWindowSeconds
+        self.baseEncodeData = baseEncodeData
+        self.tunnelProcessWorkers = tunnelProcessWorkers
+        self.tunnelPacketTimeoutSec = tunnelPacketTimeoutSec
+        self.arqInitialRTOSeconds = arqInitialRTOSeconds
+        self.arqMaxRTOSeconds = arqMaxRTOSeconds
     }
 
     init(from decoder: Decoder) throws {
@@ -225,6 +436,21 @@ struct ClientConfigDraft: Codable, Equatable {
         arqWindowSize = try container.decodeIfPresent(Int.self, forKey: .arqWindowSize) ?? fallback.arqWindowSize
         systemVPNDNSResolver = try container.decodeIfPresent(String.self, forKey: .systemVPNDNSResolver) ?? fallback.systemVPNDNSResolver
         verifyURL = try container.decodeIfPresent(String.self, forKey: .verifyURL) ?? fallback.verifyURL
+        minUploadMTU = try container.decodeIfPresent(Int.self, forKey: .minUploadMTU) ?? fallback.minUploadMTU
+        maxUploadMTU = try container.decodeIfPresent(Int.self, forKey: .maxUploadMTU) ?? fallback.maxUploadMTU
+        minDownloadMTU = try container.decodeIfPresent(Int.self, forKey: .minDownloadMTU) ?? fallback.minDownloadMTU
+        maxDownloadMTU = try container.decodeIfPresent(Int.self, forKey: .maxDownloadMTU) ?? fallback.maxDownloadMTU
+        autoRemoveLowMTUServers = try container.decodeIfPresent(Bool.self, forKey: .autoRemoveLowMTUServers) ?? fallback.autoRemoveLowMTUServers
+        streamResolverFailoverResendThreshold = try container.decodeIfPresent(Int.self, forKey: .streamResolverFailoverResendThreshold) ?? fallback.streamResolverFailoverResendThreshold
+        streamResolverFailoverCooldownSec = try container.decodeIfPresent(Double.self, forKey: .streamResolverFailoverCooldownSec) ?? fallback.streamResolverFailoverCooldownSec
+        recheckInactiveServersEnabled = try container.decodeIfPresent(Bool.self, forKey: .recheckInactiveServersEnabled) ?? fallback.recheckInactiveServersEnabled
+        autoDisableTimeoutServers = try container.decodeIfPresent(Bool.self, forKey: .autoDisableTimeoutServers) ?? fallback.autoDisableTimeoutServers
+        autoDisableTimeoutWindowSeconds = try container.decodeIfPresent(Double.self, forKey: .autoDisableTimeoutWindowSeconds) ?? fallback.autoDisableTimeoutWindowSeconds
+        baseEncodeData = try container.decodeIfPresent(Bool.self, forKey: .baseEncodeData) ?? fallback.baseEncodeData
+        tunnelProcessWorkers = try container.decodeIfPresent(Int.self, forKey: .tunnelProcessWorkers) ?? fallback.tunnelProcessWorkers
+        tunnelPacketTimeoutSec = try container.decodeIfPresent(Double.self, forKey: .tunnelPacketTimeoutSec) ?? fallback.tunnelPacketTimeoutSec
+        arqInitialRTOSeconds = try container.decodeIfPresent(Double.self, forKey: .arqInitialRTOSeconds) ?? fallback.arqInitialRTOSeconds
+        arqMaxRTOSeconds = try container.decodeIfPresent(Double.self, forKey: .arqMaxRTOSeconds) ?? fallback.arqMaxRTOSeconds
     }
 }
 
@@ -425,8 +651,26 @@ final class ConfigStore: ObservableObject {
             "SETUP_PACKET_DUPLICATION_COUNT": draft.setupPacketDuplicationCount,
             "RX_TX_WORKERS": draft.rxTxWorkers,
             "MAX_PACKETS_PER_BATCH": draft.maxPacketsPerBatch,
-            "ARQ_WINDOW_SIZE": draft.arqWindowSize
+            "ARQ_WINDOW_SIZE": draft.arqWindowSize,
+            "AUTO_REMOVE_LOW_MTU_SERVERS": draft.autoRemoveLowMTUServers,
+            "STREAM_RESOLVER_FAILOVER_RESEND_THRESHOLD": draft.streamResolverFailoverResendThreshold,
+            "STREAM_RESOLVER_FAILOVER_COOLDOWN": draft.streamResolverFailoverCooldownSec,
+            "RECHECK_INACTIVE_SERVERS_ENABLED": draft.recheckInactiveServersEnabled,
+            "AUTO_DISABLE_TIMEOUT_SERVERS": draft.autoDisableTimeoutServers,
+            "AUTO_DISABLE_TIMEOUT_WINDOW_SECONDS": draft.autoDisableTimeoutWindowSeconds,
+            "BASE_ENCODE_DATA": draft.baseEncodeData,
+            "TUNNEL_PACKET_TIMEOUT_SECONDS": draft.tunnelPacketTimeoutSec,
+            "ARQ_INITIAL_RTO_SECONDS": draft.arqInitialRTOSeconds,
+            "ARQ_MAX_RTO_SECONDS": draft.arqMaxRTOSeconds
         ]
+
+        // TUNNEL_PROCESS_WORKERS: 0 means "let upstream auto-derive". Emitting
+        // it as 0 would land on the upstream override path and force the
+        // post-clamp value to >= rxTxWorkers, defeating the auto-derive. Only
+        // include the key when the user has set an explicit non-zero value.
+        if draft.tunnelProcessWorkers > 0 {
+            dict["TUNNEL_PROCESS_WORKERS"] = draft.tunnelProcessWorkers
+        }
 
         if let hint = mtuHint {
             let band = MTUHintStore.bandwidth
@@ -441,6 +685,11 @@ final class ConfigStore: ObservableObject {
             dict["MAX_UPLOAD_MTU"] = uMax
             dict["MIN_DOWNLOAD_MTU"] = dMin
             dict["MAX_DOWNLOAD_MTU"] = dMax
+        } else {
+            dict["MIN_UPLOAD_MTU"] = draft.minUploadMTU
+            dict["MAX_UPLOAD_MTU"] = draft.maxUploadMTU
+            dict["MIN_DOWNLOAD_MTU"] = draft.minDownloadMTU
+            dict["MAX_DOWNLOAD_MTU"] = draft.maxDownloadMTU
         }
 
         guard let data = try? JSONSerialization.data(withJSONObject: dict, options: []) else {

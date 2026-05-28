@@ -138,28 +138,9 @@ final class ProfileStore: ObservableObject {
 
     @discardableResult
     func captureTuningAsNew(from draft: ClientConfigDraft, name: String) -> UUID {
-        let p = TuningPreset(
-            name: Self.uniqueName(name, existing: tuningPresets.map(\.name)),
-            protocolType: draft.protocolType,
-            listenIP: draft.listenIP,
-            listenPort: draft.listenPort,
-            socks5AuthEnabled: draft.socks5AuthEnabled,
-            socks5User: draft.socks5User,
-            socks5Pass: draft.socks5Pass,
-            resolverBalancingStrategy: draft.resolverBalancingStrategy,
-            logLevel: draft.logLevel,
-            uploadCompressionType: draft.uploadCompressionType,
-            downloadCompressionType: draft.downloadCompressionType,
-            compressionMinSize: draft.compressionMinSize,
-            mtuTestRetries: draft.mtuTestRetries,
-            mtuTestTimeout: draft.mtuTestTimeout,
-            mtuTestParallelism: draft.mtuTestParallelism,
-            packetDuplicationCount: draft.packetDuplicationCount,
-            setupPacketDuplicationCount: draft.setupPacketDuplicationCount,
-            rxTxWorkers: draft.rxTxWorkers,
-            maxPacketsPerBatch: draft.maxPacketsPerBatch,
-            arqWindowSize: draft.arqWindowSize,
-            systemVPNDNSResolver: draft.systemVPNDNSResolver
+        let p = Self.tuningPreset(
+            from: draft,
+            name: Self.uniqueName(name, existing: tuningPresets.map(\.name))
         )
         tuningPresets.append(p)
         persistTunings()
@@ -207,30 +188,7 @@ final class ProfileStore: ObservableObject {
     private func replaceTuning(id: UUID, fromDraft draft: ClientConfigDraft) {
         guard let idx = tuningPresets.firstIndex(where: { $0.id == id }) else { return }
         let existing = tuningPresets[idx]
-        tuningPresets[idx] = TuningPreset(
-            id: existing.id,
-            name: existing.name,
-            protocolType: draft.protocolType,
-            listenIP: draft.listenIP,
-            listenPort: draft.listenPort,
-            socks5AuthEnabled: draft.socks5AuthEnabled,
-            socks5User: draft.socks5User,
-            socks5Pass: draft.socks5Pass,
-            resolverBalancingStrategy: draft.resolverBalancingStrategy,
-            logLevel: draft.logLevel,
-            uploadCompressionType: draft.uploadCompressionType,
-            downloadCompressionType: draft.downloadCompressionType,
-            compressionMinSize: draft.compressionMinSize,
-            mtuTestRetries: draft.mtuTestRetries,
-            mtuTestTimeout: draft.mtuTestTimeout,
-            mtuTestParallelism: draft.mtuTestParallelism,
-            packetDuplicationCount: draft.packetDuplicationCount,
-            setupPacketDuplicationCount: draft.setupPacketDuplicationCount,
-            rxTxWorkers: draft.rxTxWorkers,
-            maxPacketsPerBatch: draft.maxPacketsPerBatch,
-            arqWindowSize: draft.arqWindowSize,
-            systemVPNDNSResolver: draft.systemVPNDNSResolver
-        )
+        tuningPresets[idx] = Self.tuningPreset(from: draft, name: existing.name, id: existing.id)
         persistTunings()
     }
 
@@ -270,31 +228,10 @@ final class ProfileStore: ObservableObject {
     func updateTuning(id: UUID, with patch: TuningPreset) {
         guard let idx = tuningPresets.firstIndex(where: { $0.id == id }) else { return }
         let trimmedName = patch.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let finalName = trimmedName.isEmpty ? tuningPresets[idx].name : trimmedName
-        tuningPresets[idx] = TuningPreset(
-            id: id,
-            name: finalName,
-            protocolType: patch.protocolType,
-            listenIP: patch.listenIP,
-            listenPort: patch.listenPort,
-            socks5AuthEnabled: patch.socks5AuthEnabled,
-            socks5User: patch.socks5User,
-            socks5Pass: patch.socks5Pass,
-            resolverBalancingStrategy: patch.resolverBalancingStrategy,
-            logLevel: patch.logLevel,
-            uploadCompressionType: patch.uploadCompressionType,
-            downloadCompressionType: patch.downloadCompressionType,
-            compressionMinSize: patch.compressionMinSize,
-            mtuTestRetries: patch.mtuTestRetries,
-            mtuTestTimeout: patch.mtuTestTimeout,
-            mtuTestParallelism: patch.mtuTestParallelism,
-            packetDuplicationCount: patch.packetDuplicationCount,
-            setupPacketDuplicationCount: patch.setupPacketDuplicationCount,
-            rxTxWorkers: patch.rxTxWorkers,
-            maxPacketsPerBatch: patch.maxPacketsPerBatch,
-            arqWindowSize: patch.arqWindowSize,
-            systemVPNDNSResolver: patch.systemVPNDNSResolver
-        )
+        var updated = patch
+        updated.id = id
+        updated.name = trimmedName.isEmpty ? tuningPresets[idx].name : trimmedName
+        tuningPresets[idx] = updated
         persistTunings()
     }
 
@@ -334,29 +271,9 @@ final class ProfileStore: ObservableObject {
     /// upstream validation). The user can then tweak from a known-good base.
     @discardableResult
     func addBlankTuning() -> UUID {
-        let d = ClientConfigDraft.default
-        let p = TuningPreset(
-            name: Self.uniqueName("New tuning", existing: tuningPresets.map(\.name)),
-            protocolType: d.protocolType,
-            listenIP: d.listenIP,
-            listenPort: d.listenPort,
-            socks5AuthEnabled: d.socks5AuthEnabled,
-            socks5User: d.socks5User,
-            socks5Pass: d.socks5Pass,
-            resolverBalancingStrategy: d.resolverBalancingStrategy,
-            logLevel: d.logLevel,
-            uploadCompressionType: d.uploadCompressionType,
-            downloadCompressionType: d.downloadCompressionType,
-            compressionMinSize: d.compressionMinSize,
-            mtuTestRetries: d.mtuTestRetries,
-            mtuTestTimeout: d.mtuTestTimeout,
-            mtuTestParallelism: d.mtuTestParallelism,
-            packetDuplicationCount: d.packetDuplicationCount,
-            setupPacketDuplicationCount: d.setupPacketDuplicationCount,
-            rxTxWorkers: d.rxTxWorkers,
-            maxPacketsPerBatch: d.maxPacketsPerBatch,
-            arqWindowSize: d.arqWindowSize,
-            systemVPNDNSResolver: d.systemVPNDNSResolver
+        let p = Self.tuningPreset(
+            from: .default,
+            name: Self.uniqueName("New tuning", existing: tuningPresets.map(\.name))
         )
         tuningPresets.append(p)
         persistTunings()
@@ -483,29 +400,9 @@ final class ProfileStore: ObservableObject {
     @discardableResult
     func duplicateTuning(_ id: UUID) -> UUID {
         guard let src = tuningPresets.first(where: { $0.id == id }) else { return id }
-        let copy = TuningPreset(
-            name: Self.copyName(of: src.name, existing: tuningPresets.map(\.name)),
-            protocolType: src.protocolType,
-            listenIP: src.listenIP,
-            listenPort: src.listenPort,
-            socks5AuthEnabled: src.socks5AuthEnabled,
-            socks5User: src.socks5User,
-            socks5Pass: src.socks5Pass,
-            resolverBalancingStrategy: src.resolverBalancingStrategy,
-            logLevel: src.logLevel,
-            uploadCompressionType: src.uploadCompressionType,
-            downloadCompressionType: src.downloadCompressionType,
-            compressionMinSize: src.compressionMinSize,
-            mtuTestRetries: src.mtuTestRetries,
-            mtuTestTimeout: src.mtuTestTimeout,
-            mtuTestParallelism: src.mtuTestParallelism,
-            packetDuplicationCount: src.packetDuplicationCount,
-            setupPacketDuplicationCount: src.setupPacketDuplicationCount,
-            rxTxWorkers: src.rxTxWorkers,
-            maxPacketsPerBatch: src.maxPacketsPerBatch,
-            arqWindowSize: src.arqWindowSize,
-            systemVPNDNSResolver: src.systemVPNDNSResolver
-        )
+        var copy = src
+        copy.id = UUID()
+        copy.name = Self.copyName(of: src.name, existing: tuningPresets.map(\.name))
         let insertAt = (tuningPresets.firstIndex { $0.id == id }).map { tuningPresets.index(after: $0) } ?? tuningPresets.endIndex
         tuningPresets.insert(copy, at: insertAt)
         persistTunings()
@@ -547,15 +444,13 @@ final class ProfileStore: ObservableObject {
         return false
     }
 
+    /// Compare draft against active tuning by checking every preset-owned
+    /// field. Local-proxy fields (protocolType / listenIP / listenPort /
+    /// socks5*) intentionally NOT compared — they're app-wide now and live
+    /// only in the draft, so editing them must never flag tuning as diverged.
     private func tuningDiverged(from draft: ClientConfigDraft) -> Bool {
         let p = activeTuning
-        return p.protocolType != draft.protocolType
-            || p.listenIP != draft.listenIP
-            || p.listenPort != draft.listenPort
-            || p.socks5AuthEnabled != draft.socks5AuthEnabled
-            || p.socks5User != draft.socks5User
-            || p.socks5Pass != draft.socks5Pass
-            || p.resolverBalancingStrategy != draft.resolverBalancingStrategy
+        return p.resolverBalancingStrategy != draft.resolverBalancingStrategy
             || p.logLevel != draft.logLevel
             || p.uploadCompressionType != draft.uploadCompressionType
             || p.downloadCompressionType != draft.downloadCompressionType
@@ -569,6 +464,21 @@ final class ProfileStore: ObservableObject {
             || p.maxPacketsPerBatch != draft.maxPacketsPerBatch
             || p.arqWindowSize != draft.arqWindowSize
             || p.systemVPNDNSResolver != draft.systemVPNDNSResolver
+            || p.minUploadMTU != draft.minUploadMTU
+            || p.maxUploadMTU != draft.maxUploadMTU
+            || p.minDownloadMTU != draft.minDownloadMTU
+            || p.maxDownloadMTU != draft.maxDownloadMTU
+            || p.autoRemoveLowMTUServers != draft.autoRemoveLowMTUServers
+            || p.streamResolverFailoverResendThreshold != draft.streamResolverFailoverResendThreshold
+            || p.streamResolverFailoverCooldownSec != draft.streamResolverFailoverCooldownSec
+            || p.recheckInactiveServersEnabled != draft.recheckInactiveServersEnabled
+            || p.autoDisableTimeoutServers != draft.autoDisableTimeoutServers
+            || p.autoDisableTimeoutWindowSeconds != draft.autoDisableTimeoutWindowSeconds
+            || p.baseEncodeData != draft.baseEncodeData
+            || p.tunnelProcessWorkers != draft.tunnelProcessWorkers
+            || p.tunnelPacketTimeoutSec != draft.tunnelPacketTimeoutSec
+            || p.arqInitialRTOSeconds != draft.arqInitialRTOSeconds
+            || p.arqMaxRTOSeconds != draft.arqMaxRTOSeconds
     }
 
     // MARK: - Persistence
@@ -682,29 +592,7 @@ final class ProfileStore: ObservableObject {
             dataEncryptionMethod: source.dataEncryptionMethod
         )
         let resolver = ResolverProfile(name: "Default", resolvers: source.resolvers)
-        let tuning = TuningPreset(
-            name: "Default",
-            protocolType: source.protocolType,
-            listenIP: source.listenIP,
-            listenPort: source.listenPort,
-            socks5AuthEnabled: source.socks5AuthEnabled,
-            socks5User: source.socks5User,
-            socks5Pass: source.socks5Pass,
-            resolverBalancingStrategy: source.resolverBalancingStrategy,
-            logLevel: source.logLevel,
-            uploadCompressionType: source.uploadCompressionType,
-            downloadCompressionType: source.downloadCompressionType,
-            compressionMinSize: source.compressionMinSize,
-            mtuTestRetries: source.mtuTestRetries,
-            mtuTestTimeout: source.mtuTestTimeout,
-            mtuTestParallelism: source.mtuTestParallelism,
-            packetDuplicationCount: source.packetDuplicationCount,
-            setupPacketDuplicationCount: source.setupPacketDuplicationCount,
-            rxTxWorkers: source.rxTxWorkers,
-            maxPacketsPerBatch: source.maxPacketsPerBatch,
-            arqWindowSize: source.arqWindowSize,
-            systemVPNDNSResolver: source.systemVPNDNSResolver
-        )
+        let tuning = Self.tuningPreset(from: source, name: "Default")
         return SeedTriple(server: server, resolver: resolver, tuning: tuning)
     }
 
@@ -720,13 +608,11 @@ final class ProfileStore: ObservableObject {
         draft.resolvers = p.resolvers
     }
 
+    /// Copy preset fields back into the live draft. Notably does NOT touch
+    /// local-proxy fields (protocolType, listenIP, listenPort, socks5*) —
+    /// those are app-wide and edited from [[AppPreferencesSheet]] only, so
+    /// switching presets must not rewrite them.
     private static func writeTuning(_ p: TuningPreset, into draft: inout ClientConfigDraft) {
-        draft.protocolType = p.protocolType
-        draft.listenIP = p.listenIP
-        draft.listenPort = p.listenPort
-        draft.socks5AuthEnabled = p.socks5AuthEnabled
-        draft.socks5User = p.socks5User
-        draft.socks5Pass = p.socks5Pass
         draft.resolverBalancingStrategy = p.resolverBalancingStrategy
         draft.logLevel = p.logLevel
         draft.uploadCompressionType = p.uploadCompressionType
@@ -741,6 +627,65 @@ final class ProfileStore: ObservableObject {
         draft.maxPacketsPerBatch = p.maxPacketsPerBatch
         draft.arqWindowSize = p.arqWindowSize
         draft.systemVPNDNSResolver = p.systemVPNDNSResolver
+        draft.minUploadMTU = p.minUploadMTU
+        draft.maxUploadMTU = p.maxUploadMTU
+        draft.minDownloadMTU = p.minDownloadMTU
+        draft.maxDownloadMTU = p.maxDownloadMTU
+        draft.autoRemoveLowMTUServers = p.autoRemoveLowMTUServers
+        draft.streamResolverFailoverResendThreshold = p.streamResolverFailoverResendThreshold
+        draft.streamResolverFailoverCooldownSec = p.streamResolverFailoverCooldownSec
+        draft.recheckInactiveServersEnabled = p.recheckInactiveServersEnabled
+        draft.autoDisableTimeoutServers = p.autoDisableTimeoutServers
+        draft.autoDisableTimeoutWindowSeconds = p.autoDisableTimeoutWindowSeconds
+        draft.baseEncodeData = p.baseEncodeData
+        draft.tunnelProcessWorkers = p.tunnelProcessWorkers
+        draft.tunnelPacketTimeoutSec = p.tunnelPacketTimeoutSec
+        draft.arqInitialRTOSeconds = p.arqInitialRTOSeconds
+        draft.arqMaxRTOSeconds = p.arqMaxRTOSeconds
+    }
+
+    /// Single TuningPreset constructor used by capture / replace / addBlank /
+    /// seedDefaults. Keeps the "which fields belong in a preset" list in one
+    /// place so adding/removing a tuned parameter only touches this builder
+    /// plus the model and `writeTuning`.
+    private static func tuningPreset(
+        from draft: ClientConfigDraft,
+        name: String,
+        id: UUID = UUID()
+    ) -> TuningPreset {
+        TuningPreset(
+            id: id,
+            name: name,
+            resolverBalancingStrategy: draft.resolverBalancingStrategy,
+            logLevel: draft.logLevel,
+            uploadCompressionType: draft.uploadCompressionType,
+            downloadCompressionType: draft.downloadCompressionType,
+            compressionMinSize: draft.compressionMinSize,
+            mtuTestRetries: draft.mtuTestRetries,
+            mtuTestTimeout: draft.mtuTestTimeout,
+            mtuTestParallelism: draft.mtuTestParallelism,
+            packetDuplicationCount: draft.packetDuplicationCount,
+            setupPacketDuplicationCount: draft.setupPacketDuplicationCount,
+            rxTxWorkers: draft.rxTxWorkers,
+            maxPacketsPerBatch: draft.maxPacketsPerBatch,
+            arqWindowSize: draft.arqWindowSize,
+            systemVPNDNSResolver: draft.systemVPNDNSResolver,
+            minUploadMTU: draft.minUploadMTU,
+            maxUploadMTU: draft.maxUploadMTU,
+            minDownloadMTU: draft.minDownloadMTU,
+            maxDownloadMTU: draft.maxDownloadMTU,
+            autoRemoveLowMTUServers: draft.autoRemoveLowMTUServers,
+            streamResolverFailoverResendThreshold: draft.streamResolverFailoverResendThreshold,
+            streamResolverFailoverCooldownSec: draft.streamResolverFailoverCooldownSec,
+            recheckInactiveServersEnabled: draft.recheckInactiveServersEnabled,
+            autoDisableTimeoutServers: draft.autoDisableTimeoutServers,
+            autoDisableTimeoutWindowSeconds: draft.autoDisableTimeoutWindowSeconds,
+            baseEncodeData: draft.baseEncodeData,
+            tunnelProcessWorkers: draft.tunnelProcessWorkers,
+            tunnelPacketTimeoutSec: draft.tunnelPacketTimeoutSec,
+            arqInitialRTOSeconds: draft.arqInitialRTOSeconds,
+            arqMaxRTOSeconds: draft.arqMaxRTOSeconds
+        )
     }
 
     // MARK: - Naming helpers

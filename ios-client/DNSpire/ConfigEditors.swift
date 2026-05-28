@@ -2,19 +2,21 @@ import SwiftUI
 import UIKit
 
 /// Minimal "App preferences" sheet. Replaces the previous Settings tab; per-
-/// profile config (domains, key, resolvers, listen IP, tuning steppers) now
-/// lives exclusively in [[ProfileEditSheets]] keyed to a specific profile id.
+/// tuning config (resolver strategy, compression, MTU, ARQ knobs, log level)
+/// now lives exclusively in [[TuningPresetEditSheet]] keyed to a specific
+/// preset id.
 ///
-/// Only truly-global, non-per-profile controls live here:
+/// Hosts truly-global, non-per-preset controls only:
 ///   • Auto-pick fastest on launch — an app-level behaviour toggle.
-///   • Log level — applies to the running session, not to any saved profile.
+///   • **Local proxy** — listener IP/port/SOCKS5 auth. App-wide because they
+///     describe where on *this device* the proxy binds, not anything about a
+///     tunnel server. Stored in [[ClientConfigDraft]] and surfaced here.
+///   • Verify URL — diagnostic endpoint used by the packet-tunnel extension.
 ///   • Remove iOS VPN profile — a one-shot system action, not a config value.
 ///   • Reset draft to defaults — destructive escape hatch.
 ///
-/// All other config moved out: changing domains/keys/listen IP/tuning now
-/// requires editing the corresponding active profile (which re-syncs the
-/// draft on Save). That trade replaces the old "edit draft live, save back
-/// later" flow with atomic Cancel-discards editing — arguably an improvement.
+/// Log level intentionally NOT here — it moved into TuningPreset so a
+/// "debug" tuning can be toggled per-session without shifting a global.
 struct AppPreferencesSheet: View {
     @EnvironmentObject var configStore: ConfigStore
     @EnvironmentObject var vpn: VPNManager
@@ -47,13 +49,40 @@ struct AppPreferencesSheet: View {
                     Text("On launch, switches the active server to the fastest profile from your last “Test all” run (results must be under 7 days old, applied only when no tunnel is active).")
                 }
 
-                Section("Logging") {
-                    Picker("Log level", selection: $configStore.draft.logLevel) {
-                        Text("DEBUG").tag("DEBUG")
-                        Text("INFO").tag("INFO")
-                        Text("WARN").tag("WARN")
-                        Text("ERROR").tag("ERROR")
+                Section {
+                    Picker("Mode", selection: $configStore.draft.protocolType) {
+                        Text("SOCKS5").tag("SOCKS5")
+                        Text("TCP").tag("TCP")
                     }
+                    ValidatedTextRow(
+                        label: "Listen IP",
+                        placeholder: "127.0.0.1",
+                        text: $configStore.draft.listenIP,
+                        keyboard: .URL,
+                        error: ConfigStore.validateHost(configStore.draft.listenIP) ? nil : "Invalid IP or hostname"
+                    )
+                    ValidatedPortRow(
+                        label: "Listen port",
+                        placeholder: "18000",
+                        value: $configStore.draft.listenPort
+                    )
+                    Toggle("Require SOCKS5 auth", isOn: $configStore.draft.socks5AuthEnabled)
+                    if configStore.draft.socks5AuthEnabled {
+                        LabeledContent("User") {
+                            TextField("user", text: $configStore.draft.socks5User)
+                                .multilineTextAlignment(.trailing)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                        }
+                        LabeledContent("Password") {
+                            SecureField("password", text: $configStore.draft.socks5Pass)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                } header: {
+                    Text("Local proxy")
+                } footer: {
+                    Text("Where the SOCKS5 listener binds in proxy mode. Same address for every server profile — only the upstream tunnel changes.")
                 }
 
                 Section {

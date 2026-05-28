@@ -178,10 +178,11 @@ struct ResolverProfileEditSheet: View {
     }
 }
 
-/// Edit-in-place sheet for a [[TuningPreset]]. Hosts the Local Proxy +
-/// Performance + Advanced tuning controls (now exclusively here — the old
-/// global Settings tab is gone). Binds to a local `working` TuningPreset
-/// instead of the live draft so Cancel discards unsaved edits atomically.
+/// Edit-in-place sheet for a [[TuningPreset]]. Hosts upstream transport
+/// knobs only — local-proxy listener (protocolType / listenIP / port /
+/// socks5 auth) is app-wide and edited from [[AppPreferencesSheet]]; server
+/// identity lives in [[ServerProfileEditSheet]]. Binds to a local `working`
+/// TuningPreset so Cancel discards unsaved edits atomically.
 struct TuningPresetEditSheet: View {
     let id: UUID
 
@@ -201,12 +202,6 @@ struct TuningPresetEditSheet: View {
         _working = State(initialValue: TuningPreset(
             id: id,
             name: "",
-            protocolType: d.protocolType,
-            listenIP: d.listenIP,
-            listenPort: d.listenPort,
-            socks5AuthEnabled: d.socks5AuthEnabled,
-            socks5User: d.socks5User,
-            socks5Pass: d.socks5Pass,
             resolverBalancingStrategy: d.resolverBalancingStrategy,
             logLevel: d.logLevel,
             uploadCompressionType: d.uploadCompressionType,
@@ -220,7 +215,22 @@ struct TuningPresetEditSheet: View {
             rxTxWorkers: d.rxTxWorkers,
             maxPacketsPerBatch: d.maxPacketsPerBatch,
             arqWindowSize: d.arqWindowSize,
-            systemVPNDNSResolver: d.systemVPNDNSResolver
+            systemVPNDNSResolver: d.systemVPNDNSResolver,
+            minUploadMTU: d.minUploadMTU,
+            maxUploadMTU: d.maxUploadMTU,
+            minDownloadMTU: d.minDownloadMTU,
+            maxDownloadMTU: d.maxDownloadMTU,
+            autoRemoveLowMTUServers: d.autoRemoveLowMTUServers,
+            streamResolverFailoverResendThreshold: d.streamResolverFailoverResendThreshold,
+            streamResolverFailoverCooldownSec: d.streamResolverFailoverCooldownSec,
+            recheckInactiveServersEnabled: d.recheckInactiveServersEnabled,
+            autoDisableTimeoutServers: d.autoDisableTimeoutServers,
+            autoDisableTimeoutWindowSeconds: d.autoDisableTimeoutWindowSeconds,
+            baseEncodeData: d.baseEncodeData,
+            tunnelProcessWorkers: d.tunnelProcessWorkers,
+            tunnelPacketTimeoutSec: d.tunnelPacketTimeoutSec,
+            arqInitialRTOSeconds: d.arqInitialRTOSeconds,
+            arqMaxRTOSeconds: d.arqMaxRTOSeconds
         ))
         _loaded = State(initialValue: false)
     }
@@ -232,53 +242,6 @@ struct TuningPresetEditSheet: View {
                     TextField("Preset name", text: $working.name)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.words)
-                }
-
-                Section("Local proxy") {
-                    Picker("Mode", selection: $working.protocolType) {
-                        Text("SOCKS5").tag("SOCKS5")
-                        Text("TCP").tag("TCP")
-                    }
-                    ValidatedTextRow(
-                        label: "Listen IP",
-                        placeholder: "127.0.0.1",
-                        text: $working.listenIP,
-                        keyboard: .URL,
-                        error: ConfigStore.validateHost(working.listenIP) ? nil : "Invalid IP or hostname"
-                    )
-                    ValidatedPortRow(
-                        label: "Listen port",
-                        placeholder: "18000",
-                        value: $working.listenPort
-                    )
-                    Toggle("Require SOCKS5 auth", isOn: $working.socks5AuthEnabled)
-                    if working.socks5AuthEnabled {
-                        LabeledContent("User") {
-                            TextField("user", text: $working.socks5User)
-                                .multilineTextAlignment(.trailing)
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                        }
-                        LabeledContent("Password") {
-                            SecureField("password", text: $working.socks5Pass)
-                                .multilineTextAlignment(.trailing)
-                        }
-                    }
-                }
-
-                Section {
-                    ValidatedTextRow(
-                        label: "Upstream DNS",
-                        placeholder: "1.1.1.1:53",
-                        text: $working.systemVPNDNSResolver,
-                        keyboard: .URL,
-                        error: ConfigStore.validateHostPort(working.systemVPNDNSResolver)
-                            ? nil : "Expected host:port (e.g. 1.1.1.1:53 or [::1]:53)"
-                    )
-                } header: {
-                    Text("System VPN")
-                } footer: {
-                    Text("DNS-over-TCP target the packet-tunnel extension shims UDP-53 onto.")
                 }
 
                 Section("Performance") {
@@ -297,29 +260,6 @@ struct TuningPresetEditSheet: View {
                             Text(option.label).tag(option.rawValue)
                         }
                     }
-                }
-
-                Section("Logging") {
-                    Picker("Log level", selection: $working.logLevel) {
-                        Text("DEBUG").tag("DEBUG")
-                        Text("INFO").tag("INFO")
-                        Text("WARN").tag("WARN")
-                        Text("ERROR").tag("ERROR")
-                    }
-                }
-
-                Section {
-                    Stepper(value: $working.compressionMinSize, in: 100...65535, step: 50) {
-                        LabeledContent("Compression min size") {
-                            Text("\(working.compressionMinSize) B")
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                        }
-                    }
-                } header: {
-                    Text("Compression")
-                } footer: {
-                    Text("Payloads smaller than this are sent uncompressed regardless of the chosen algorithm.")
                 }
 
                 Section {
@@ -346,6 +286,56 @@ struct TuningPresetEditSheet: View {
                     Text("MTU probing")
                 } footer: {
                     Text("Discovery sweep run once per session to find the largest payload that survives the DNS path.")
+                }
+
+                Section {
+                    Stepper(value: $working.minUploadMTU, in: 38...4096, step: 2) {
+                        LabeledContent("Min upload") {
+                            Text("\(working.minUploadMTU) B")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                    Stepper(value: $working.maxUploadMTU, in: max(working.minUploadMTU, 38)...4096, step: 2) {
+                        LabeledContent("Max upload") {
+                            Text("\(working.maxUploadMTU) B")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                    Stepper(value: $working.minDownloadMTU, in: 100...4096, step: 10) {
+                        LabeledContent("Min download") {
+                            Text("\(working.minDownloadMTU) B")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                    Stepper(value: $working.maxDownloadMTU, in: max(working.minDownloadMTU, 100)...4096, step: 10) {
+                        LabeledContent("Max download") {
+                            Text("\(working.maxDownloadMTU) B")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                    Toggle("Auto-remove low-MTU servers", isOn: $working.autoRemoveLowMTUServers)
+                } header: {
+                    Text("MTU range")
+                } footer: {
+                    Text("Bounds the probe's bisect search. A learned MTUHint can narrow these further at connect time; defaults match upstream's mobile-tuned floors.")
+                }
+
+                Section {
+                    Stepper(value: $working.compressionMinSize, in: 100...65535, step: 50) {
+                        LabeledContent("Compression min size") {
+                            Text("\(working.compressionMinSize) B")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                } header: {
+                    Text("Compression")
+                } footer: {
+                    Text("Payloads smaller than this are sent uncompressed regardless of the chosen algorithm.")
                 }
 
                 Section {
@@ -377,6 +367,13 @@ struct TuningPresetEditSheet: View {
                                 .monospacedDigit()
                         }
                     }
+                    Stepper(value: $working.tunnelProcessWorkers, in: 0...64) {
+                        LabeledContent("Process workers") {
+                            Text(working.tunnelProcessWorkers == 0 ? "auto" : "\(working.tunnelProcessWorkers)")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
                     Stepper(value: $working.maxPacketsPerBatch, in: 1...64) {
                         LabeledContent("Batch size") {
                             Text("\(working.maxPacketsPerBatch)")
@@ -391,10 +388,85 @@ struct TuningPresetEditSheet: View {
                                 .monospacedDigit()
                         }
                     }
+                    LabeledContent("ARQ initial RTO") {
+                        TextField("1.0", value: $working.arqInitialRTOSeconds, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("ARQ max RTO") {
+                        TextField("5.0", value: $working.arqMaxRTOSeconds, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("Packet timeout") {
+                        TextField("10.0", value: $working.tunnelPacketTimeoutSec, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
                 } header: {
                     Text("Concurrency & ARQ")
                 } footer: {
-                    Text("Worker counts shape parallelism on the wire; ARQ window is the in-flight packet ceiling before the sender stalls.")
+                    Text("Process workers = 0 lets upstream auto-derive from RX/TX count. ARQ RTO bounds the per-packet retransmit backoff.")
+                }
+
+                Section {
+                    Stepper(value: $working.streamResolverFailoverResendThreshold, in: 1...256) {
+                        LabeledContent("Failover threshold") {
+                            Text("\(working.streamResolverFailoverResendThreshold)")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                    LabeledContent("Failover cooldown") {
+                        TextField("2.5", value: $working.streamResolverFailoverCooldownSec, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Toggle("Recheck inactive resolvers", isOn: $working.recheckInactiveServersEnabled)
+                    Toggle("Auto-disable timing-out resolvers", isOn: $working.autoDisableTimeoutServers)
+                    if working.autoDisableTimeoutServers {
+                        LabeledContent("Disable window") {
+                            TextField("30", value: $working.autoDisableTimeoutWindowSeconds, format: .number)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                } header: {
+                    Text("Resolver resilience")
+                } footer: {
+                    Text("Controls how aggressively the balancer abandons a struggling resolver and whether disabled resolvers get re-probed.")
+                }
+
+                Section {
+                    Toggle("Base-encode payloads", isOn: $working.baseEncodeData)
+                } header: {
+                    Text("Encoding")
+                } footer: {
+                    Text("Encodes DNS payloads in a printable form. Increases bytes-on-the-wire — only useful with restrictive resolvers that mangle raw binary.")
+                }
+
+                Section("Logging") {
+                    Picker("Log level", selection: $working.logLevel) {
+                        Text("DEBUG").tag("DEBUG")
+                        Text("INFO").tag("INFO")
+                        Text("WARN").tag("WARN")
+                        Text("ERROR").tag("ERROR")
+                    }
+                }
+
+                Section {
+                    ValidatedTextRow(
+                        label: "Upstream DNS",
+                        placeholder: "1.1.1.1:53",
+                        text: $working.systemVPNDNSResolver,
+                        keyboard: .URL,
+                        error: ConfigStore.validateHostPort(working.systemVPNDNSResolver)
+                            ? nil : "Expected host:port (e.g. 1.1.1.1:53 or [::1]:53)"
+                    )
+                } header: {
+                    Text("System VPN")
+                } footer: {
+                    Text("DNS-over-TCP target the packet-tunnel extension shims UDP-53 onto.")
                 }
             }
             .navigationTitle("Edit tuning")
