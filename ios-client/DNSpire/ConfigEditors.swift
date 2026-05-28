@@ -1,11 +1,27 @@
 import SwiftUI
 import UIKit
 
-struct SettingsView: View {
+/// Minimal "App preferences" sheet. Replaces the previous Settings tab; per-
+/// profile config (domains, key, resolvers, listen IP, tuning steppers) now
+/// lives exclusively in [[ProfileEditSheets]] keyed to a specific profile id.
+///
+/// Only truly-global, non-per-profile controls live here:
+///   • Auto-pick fastest on launch — an app-level behaviour toggle.
+///   • Log level — applies to the running session, not to any saved profile.
+///   • Remove iOS VPN profile — a one-shot system action, not a config value.
+///   • Reset draft to defaults — destructive escape hatch.
+///
+/// All other config moved out: changing domains/keys/listen IP/tuning now
+/// requires editing the corresponding active profile (which re-syncs the
+/// draft on Save). That trade replaces the old "edit draft live, save back
+/// later" flow with atomic Cancel-discards editing — arguably an improvement.
+struct AppPreferencesSheet: View {
     @EnvironmentObject var configStore: ConfigStore
     @EnvironmentObject var vpn: VPNManager
+    @Environment(\.dismiss) private var dismiss
 
     @State private var showRemoveProfileAlert = false
+    @State private var showResetAlert = false
 
     /// Mirrors the same `@AppStorage` key written by [[DNSpireApp]]. SwiftUI
     /// keeps both views in sync via UserDefaults.
@@ -23,127 +39,12 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Tunnel Identity") {
-                    DomainsEditor(domains: $configStore.draft.domains)
-                    SecureField("Encryption key", text: $configStore.draft.encryptionKey)
-                        .textContentType(.password)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    Picker("Encryption method", selection: $configStore.draft.dataEncryptionMethod) {
-                        Text("None").tag(0)
-                        Text("XOR").tag(1)
-                        Text("ChaCha20").tag(2)
-                        Text("AES-128-GCM").tag(3)
-                        Text("AES-192-GCM").tag(4)
-                        Text("AES-256-GCM").tag(5)
-                    }
-                }
-
-                Section("Local Proxy") {
-                    Picker("Mode", selection: $configStore.draft.protocolType) {
-                        Text("SOCKS5").tag("SOCKS5")
-                        Text("TCP").tag("TCP")
-                    }
-                    ValidatedTextRow(
-                        label: "Listen IP",
-                        placeholder: "127.0.0.1",
-                        text: $configStore.draft.listenIP,
-                        keyboard: .URL,
-                        error: ConfigStore.validateHost(configStore.draft.listenIP)
-                            ? nil : "Invalid IP or hostname"
-                    )
-                    ValidatedPortRow(
-                        label: "Listen port",
-                        placeholder: "18000",
-                        value: $configStore.draft.listenPort
-                    )
-                    Toggle("Require SOCKS5 auth", isOn: $configStore.draft.socks5AuthEnabled)
-                    if configStore.draft.socks5AuthEnabled {
-                        LabeledContent("User") {
-                            TextField("user", text: $configStore.draft.socks5User)
-                                .multilineTextAlignment(.trailing)
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                        }
-                        LabeledContent("Password") {
-                            SecureField("password", text: $configStore.draft.socks5Pass)
-                                .multilineTextAlignment(.trailing)
-                        }
-                    }
-                }
-
-                Section("Resolvers") {
-                    ResolverEditor(resolvers: $configStore.draft.resolvers)
-                }
-
                 Section {
-                    ValidatedTextRow(
-                        label: "Upstream DNS",
-                        placeholder: "1.1.1.1:53",
-                        text: $configStore.draft.systemVPNDNSResolver,
-                        keyboard: .URL,
-                        error: ConfigStore.validateHostPort(configStore.draft.systemVPNDNSResolver)
-                            ? nil : "Expected host:port (e.g. 1.1.1.1:53 or [::1]:53)"
-                    )
-                    ValidatedTextRow(
-                        label: "Verify URL",
-                        placeholder: "https://1.1.1.1/cdn-cgi/trace",
-                        text: $configStore.draft.verifyURL,
-                        keyboard: .URL,
-                        error: isValidVerifyURL ? nil : "Must be an https:// URL"
-                    )
-                } header: {
-                    Text("System VPN")
-                } footer: {
-                    Text("DNS-over-TCP target the packet-tunnel extension shims UDP-53 onto. Use a resolver reachable through your DNS tunnel (e.g. 1.1.1.1:53, 8.8.8.8:53). Ignored in SOCKS5 proxy mode. Verify URL is the HTTPS endpoint the extension hits after connecting to confirm end-to-end data flow.")
-                }
-
-                if vpn.profileInstalled {
-                    Section {
-                        Button(role: .destructive) {
-                            showRemoveProfileAlert = true
-                        } label: {
-                            Label("Remove VPN profile", systemImage: "trash")
-                        }
-                    } footer: {
-                        Text("Deletes the DNSpire entry from iOS VPN settings. You'll be prompted for permission again the next time you enable System VPN.")
-                    }
-                }
-
-                Section {
-                    Picker("Resolving strategy", selection: $configStore.draft.resolverBalancingStrategy) {
-                        ForEach(ResolverBalancingOption.allCases) { option in
-                            Text(option.label).tag(option.rawValue)
-                        }
-                    }
-                    Picker("Upload compression", selection: $configStore.draft.uploadCompressionType) {
-                        ForEach(CompressionOption.allCases) { option in
-                            Text(option.label).tag(option.rawValue)
-                        }
-                    }
-                    Picker("Download compression", selection: $configStore.draft.downloadCompressionType) {
-                        ForEach(CompressionOption.allCases) { option in
-                            Text(option.label).tag(option.rawValue)
-                        }
-                    }
                     Toggle("Auto-pick fastest on launch", isOn: $autoPickEnabled)
                 } header: {
-                    Text("Performance")
+                    Text("Startup")
                 } footer: {
-                    Text("Resolving strategy picks which DNS resolvers to send queries through. Compression is applied to tunnel payloads larger than the threshold in Advanced. Auto-pick switches the active server to the fastest profile from your last “Test all” run (results must be under 7 days old, and only applied when no tunnel is active).")
-                }
-
-                Section {
-                    NavigationLink {
-                        AdvancedTuningView()
-                            .environmentObject(configStore)
-                    } label: {
-                        LabeledContent("Advanced tuning") {
-                            Text("MTU, ARQ, duplication")
-                                .foregroundStyle(.secondary)
-                                .font(.footnote)
-                        }
-                    }
+                    Text("On launch, switches the active server to the fastest profile from your last “Test all” run (results must be under 7 days old, applied only when no tunnel is active).")
                 }
 
                 Section("Logging") {
@@ -156,12 +57,48 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Button("Reset to defaults", role: .destructive) {
-                        configStore.draft = .default
+                    ValidatedTextRow(
+                        label: "Verify URL",
+                        placeholder: "https://1.1.1.1/cdn-cgi/trace",
+                        text: $configStore.draft.verifyURL,
+                        keyboard: .URL,
+                        error: isValidVerifyURL ? nil : "Must be an https:// URL"
+                    )
+                } header: {
+                    Text("Diagnostics")
+                } footer: {
+                    Text("HTTPS endpoint the packet-tunnel extension hits after connecting to confirm end-to-end data flow. Not bound to a profile — change once and it sticks across servers.")
+                }
+
+                if vpn.profileInstalled {
+                    Section {
+                        Button(role: .destructive) {
+                            showRemoveProfileAlert = true
+                        } label: {
+                            Label("Remove VPN profile", systemImage: "trash")
+                        }
+                    } header: {
+                        Text("System VPN")
+                    } footer: {
+                        Text("Deletes the DNSpire entry from iOS VPN settings. You'll be prompted for permission again the next time you enable System VPN.")
                     }
                 }
+
+                Section {
+                    Button("Reset draft to defaults", role: .destructive) {
+                        showResetAlert = true
+                    }
+                } footer: {
+                    Text("Replaces your current working draft with factory defaults. Saved profiles are untouched — switching to one restores its values.")
+                }
             }
-            .navigationTitle("Settings")
+            .navigationTitle("App preferences")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
             .alert("Remove VPN profile?", isPresented: $showRemoveProfileAlert) {
                 Button("Cancel", role: .cancel) {}
                 Button("Remove", role: .destructive) {
@@ -169,6 +106,14 @@ struct SettingsView: View {
                 }
             } message: {
                 Text("Deletes the DNSpire entry from iOS VPN settings. You'll be prompted for permission again the next time you enable System VPN.")
+            }
+            .alert("Reset draft to defaults?", isPresented: $showResetAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Reset", role: .destructive) {
+                    configStore.draft = .default
+                }
+            } message: {
+                Text("Your current working values will be replaced. Saved profiles remain intact.")
             }
         }
     }

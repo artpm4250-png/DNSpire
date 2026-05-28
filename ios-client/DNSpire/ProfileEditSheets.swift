@@ -108,9 +108,10 @@ struct ServerProfileEditSheet: View {
     }
 }
 
-/// Edit-in-place sheet for a [[ResolverProfile]]. Reuses the same
-/// [[ResolverEditor]] component used by SettingsView so the bulk-edit /
-/// per-row toggle affordances are identical to the active-profile flow.
+/// Edit-in-place sheet for a [[ResolverProfile]]. Reuses the shared
+/// [[ResolverEditor]] component (now living in `ConfigEditors.swift`) so the
+/// bulk-edit / per-row toggle affordances are identical wherever resolvers
+/// are edited.
 struct ResolverProfileEditSheet: View {
     let id: UUID
 
@@ -177,10 +178,10 @@ struct ResolverProfileEditSheet: View {
     }
 }
 
-/// Edit-in-place sheet for a [[TuningPreset]]. Mirrors the layout of the
-/// "Local Proxy" + "Performance" + AdvancedTuningView sections from
-/// [[SettingsView]] but binds to a local `working` TuningPreset instead of
-/// the live draft.
+/// Edit-in-place sheet for a [[TuningPreset]]. Hosts the Local Proxy +
+/// Performance + Advanced tuning controls (now exclusively here — the old
+/// global Settings tab is gone). Binds to a local `working` TuningPreset
+/// instead of the live draft so Cancel discards unsaved edits atomically.
 struct TuningPresetEditSheet: View {
     let id: UUID
 

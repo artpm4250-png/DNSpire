@@ -92,7 +92,7 @@ final class VPNManager: ObservableObject {
     /// the per-snapshot MTU observation back into [[MTUHintStore]] without
     /// VPNManager needing direct access to [[ProfileStore]].
     @Published private(set) var activeSessionServerID: UUID?
-    /// True when [[ConnectionView]] resolved a non-stale [[MTUHint]] for the
+    /// True when [[HomeView]] resolved a non-stale [[MTUHint]] for the
     /// active server and passed it to `connect(...)`. Surfaced as a small bolt
     /// glyph in the LiveTunnelCard header so the user can tell why bootstrap
     /// felt faster on a familiar server.
@@ -206,7 +206,7 @@ final class VPNManager: ObservableObject {
 
     /// Ask the extension to re-run the post-connect HTTPS probe. No-op if the
     /// tunnel isn't up. Used by the "tap to retry" affordance in
-    /// [[ConnectionView]]'s VPNBadge when verification settles in
+    /// [[HomeView]]'s VPNBadge when verification settles in
     /// `.needsAttention`.
     func requestReverify() {
         guard let session = manager?.connection as? NETunnelProviderSession else { return }

@@ -42,6 +42,13 @@ final class ResolverScanner: ObservableObject {
     /// the user point the probe at a domain they trust under their
     /// jurisdiction; for now the constant matches the Go binding default.
     @Published var controlName: String = "example.com"
+    /// Raw text the user is currently editing in the Scan input pane. Hoisted
+    /// out of [[ScanView]]'s local @State because Scan is now sheet-presented
+    /// from HomeView's toolbar — local @State is torn down on sheet dismiss,
+    /// which would lose a long paste the user is mid-edit. Storing it on the
+    /// EnvironmentObject lets dismiss/re-open round-trip cleanly while a scan
+    /// is still in flight.
+    @Published var input: String = ""
 
     /// Per-request timeout for the underlying UDP DNS query. 1500 ms catches
     /// a packet loss while still keeping a 100-row scan under a minute.

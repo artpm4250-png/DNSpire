@@ -11,7 +11,6 @@ import UniformTypeIdentifiers
 struct ScanView: View {
     @EnvironmentObject var scanner: ResolverScanner
 
-    @State private var input: String = ""
     @State private var importer: Bool = false
     @State private var shareItem: ShareItem?
     @State private var copyHint: Bool = false
@@ -35,12 +34,12 @@ struct ScanView: View {
                             Label("Import .txt", systemImage: "doc.text")
                         }
                         Button(role: .destructive) {
-                            input = ""
+                            scanner.input = ""
                             scanner.clear()
                         } label: {
                             Label("Clear", systemImage: "trash")
                         }
-                        .disabled(input.isEmpty && scanner.rows.isEmpty)
+                        .disabled(scanner.input.isEmpty && scanner.rows.isEmpty)
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -75,7 +74,7 @@ struct ScanView: View {
                     .foregroundStyle(.tertiary)
             }
 
-            TextEditor(text: $input)
+            TextEditor(text: $scanner.input)
                 .focused($inputFocused)
                 .font(.callout.monospaced())
                 .frame(minHeight: 96, maxHeight: 160)
@@ -86,7 +85,7 @@ struct ScanView: View {
                         .fill(Color(.secondarySystemBackground))
                 )
                 .overlay(alignment: .topLeading) {
-                    if input.isEmpty {
+                    if scanner.input.isEmpty {
                         Text("1.1.1.1\n8.8.8.8:53\n9.9.9.9")
                             .font(.callout.monospaced())
                             .foregroundStyle(.tertiary)
@@ -95,7 +94,7 @@ struct ScanView: View {
                             .allowsHitTesting(false)
                     }
                 }
-                .onChange(of: input) { _, newValue in
+                .onChange(of: scanner.input) { _, newValue in
                     scanner.ingest(text: newValue)
                 }
 
@@ -288,7 +287,7 @@ struct ScanView: View {
         defer { if needsScope { url.stopAccessingSecurityScopedResource() } }
         if let data = try? Data(contentsOf: url),
            let text = String(data: data, encoding: .utf8) {
-            input = text
+            scanner.input = text
         }
     }
 }

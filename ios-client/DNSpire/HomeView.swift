@@ -28,7 +28,15 @@ enum TunnelMode: String, CaseIterable, Identifiable {
     }
 }
 
-struct ConnectionView: View {
+/// Toolbar-presented sheets owned by [[HomeView]]. Routed through a single
+/// `@State presentedSheet` to dodge the "two parallel @State Bools both flip
+/// true" pitfall that produces a dropped sheet on SwiftUI.
+enum HomeSheet: String, Identifiable {
+    case logs, scan, preferences, importLink
+    var id: String { rawValue }
+}
+
+struct HomeView: View {
     @EnvironmentObject var configStore: ConfigStore
     @EnvironmentObject var profileStore: ProfileStore
     @EnvironmentObject var tunnel: TunnelController
@@ -37,6 +45,8 @@ struct ConnectionView: View {
     @EnvironmentObject var mtuHints: MTUHintStore
 
     @AppStorage("DNSpire.tunnelMode") private var modeRaw: String = TunnelMode.proxy.rawValue
+
+    @State private var presentedSheet: HomeSheet?
 
     private var mode: TunnelMode {
         TunnelMode(rawValue: modeRaw) ?? .proxy
@@ -91,7 +101,9 @@ struct ConnectionView: View {
                     }
 
                     if let err = currentError {
-                        ErrorCard(message: err)
+                        ErrorCard(message: err) {
+                            presentedSheet = .logs
+                        }
                     }
 
                     ProfileSelectorCard()
@@ -102,6 +114,51 @@ struct ConnectionView: View {
             }
             .navigationTitle("DNSpire")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button {
+                            presentedSheet = .scan
+                        } label: {
+                            Label("Scan resolvers", systemImage: "magnifyingglass")
+                        }
+                        Button {
+                            presentedSheet = .importLink
+                        } label: {
+                            Label("Import profile link", systemImage: "square.and.arrow.down")
+                        }
+                        Divider()
+                        Button {
+                            presentedSheet = .preferences
+                        } label: {
+                            Label("App preferences", systemImage: "gearshape")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .accessibilityLabel("Tools")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        presentedSheet = .logs
+                    } label: {
+                        Image(systemName: "doc.text")
+                    }
+                    .accessibilityLabel("View logs")
+                }
+            }
+            .sheet(item: $presentedSheet) { sheet in
+                switch sheet {
+                case .logs:
+                    LogsView()
+                case .scan:
+                    ScanView()
+                case .preferences:
+                    AppPreferencesSheet()
+                case .importLink:
+                    StormDNSImportSheet()
+                }
+            }
         }
     }
 
@@ -574,11 +631,28 @@ private struct ProxyCard: View {
 
 private struct ErrorCard: View {
     let message: String
+    /// Opens the Logs sheet from the parent. Errors are the highest-value
+    /// reason a user needs Logs, so funnel them straight there — compensates
+    /// for Logs losing its bottom-tab visibility under the toolbar-driven
+    /// HomeView layout.
+    let onViewLogs: () -> Void
+
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
-            Text(message).font(.subheadline)
-            Spacer()
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                Text(message).font(.subheadline)
+                Spacer()
+            }
+            Button {
+                onViewLogs()
+            } label: {
+                Label("View logs", systemImage: "doc.text")
+                    .font(.footnote.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(.red)
         }
         .padding()
         .background(Color.red.opacity(0.12))

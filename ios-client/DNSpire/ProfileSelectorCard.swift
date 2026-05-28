@@ -33,7 +33,7 @@ enum ProfileSliceKind: String, Identifiable {
     }
 }
 
-/// Replaces the old static "Configuration" summary in ConnectionView with a
+/// Replaces the old static "Configuration" summary in [[HomeView]] with a
 /// tappable card that surfaces the three active profile names and a
 /// "(modified)" marker per slice when the live draft diverges from the
 /// active profile.
